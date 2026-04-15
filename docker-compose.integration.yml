@@ -1,0 +1,108 @@
+services:
+  gridlane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gridlane:local
+    ports:
+      - "4444:4444"
+      - "9090:9090"
+    environment:
+      GRIDLANE_ALICE_PASSWORD: ${GRIDLANE_ALICE_PASSWORD:-wonderland}
+      GRIDLANE_ADMIN_TOKEN: ${GRIDLANE_ADMIN_TOKEN:-root-token}
+    volumes:
+      - ./examples/router.compose.json:/etc/gridlane/router.json:ro
+    command:
+      - -listen
+      - :4444
+      - -metrics-listen
+      - :9090
+      - -config
+      - /etc/gridlane/router.json
+      - -log-format
+      - json
+      - -proxy-timeout
+      - 10m
+    depends_on:
+      - selenwright-a
+      - selenwright-b
+    networks:
+      - gridlane-integration
+
+  selenwright-a:
+    image: selenwright:local
+    build:
+      context: ../selenwright
+      dockerfile: Dockerfile
+    environment:
+      OVERRIDE_VIDEO_OUTPUT_DIR: /Users/Sasha/dev/selenwright/video
+      DOCKER_API_VERSION: "1.45"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../selenwright/config:/etc/selenwright:ro
+      - ../selenwright/video:/opt/selenwright/video
+      - ../selenwright/logs:/opt/selenwright/logs
+      - ../selenwright/artifacts:/opt/selenwright/artifacts
+      - ../selenwright/state:/opt/selenwright/state
+    command:
+      - -listen
+      - :4444
+      - -conf
+      - /etc/selenwright/browsers.json
+      - -limit
+      - "20"
+      - -timeout
+      - 10m
+      - -video-output-dir
+      - /opt/selenwright/video
+      - -log-output-dir
+      - /opt/selenwright/logs
+      - -artifact-history-dir
+      - /opt/selenwright/artifacts
+      - -artifact-history-settings
+      - /opt/selenwright/state/artifact-history-a.json
+      - -container-network
+      - gridlane-integration
+    networks:
+      - gridlane-integration
+
+  selenwright-b:
+    image: selenwright:local
+    build:
+      context: ../selenwright
+      dockerfile: Dockerfile
+    environment:
+      OVERRIDE_VIDEO_OUTPUT_DIR: /Users/Sasha/dev/selenwright/video
+      DOCKER_API_VERSION: "1.45"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../selenwright/config:/etc/selenwright:ro
+      - ../selenwright/video:/opt/selenwright/video
+      - ../selenwright/logs:/opt/selenwright/logs
+      - ../selenwright/artifacts:/opt/selenwright/artifacts
+      - ../selenwright/state:/opt/selenwright/state
+    command:
+      - -listen
+      - :4444
+      - -conf
+      - /etc/selenwright/browsers.json
+      - -limit
+      - "20"
+      - -timeout
+      - 10m
+      - -video-output-dir
+      - /opt/selenwright/video
+      - -log-output-dir
+      - /opt/selenwright/logs
+      - -artifact-history-dir
+      - /opt/selenwright/artifacts
+      - -artifact-history-settings
+      - /opt/selenwright/state/artifact-history-b.json
+      - -container-network
+      - gridlane-integration
+    networks:
+      - gridlane-integration
+
+networks:
+  gridlane-integration:
+    name: gridlane-integration

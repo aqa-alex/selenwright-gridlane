@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "users": [
+    {
+      "name": "alice",
+      "password_ref": "env:GRIDLANE_ALICE_PASSWORD",
+      "quota": {
+        "max_sessions": 20
+      }
+    }
+  ],
+  "guest": {
+    "quota": {
+      "max_sessions": 2
+    }
+  },
+  "catalog": {
+    "browsers": [
+      {
+        "name": "chrome",
+        "versions": [
+          "stable"
+        ],
+        "platforms": [
+          "linux"
+        ],
+        "protocols": [
+          "webdriver",
+          "playwright"
+        ]
+      }
+    ]
+  },
+  "backend_pools": [
+    {
+      "id": "selenwright-a",
+      "endpoint": "http://selenwright-a:4444",
+      "region": "local-a",
+      "weight": 1,
+      "protocols": [
+        "webdriver",
+        "playwright"
+      ],
+      "health": {
+        "enabled": true,
+        "failure_threshold": 2,
+        "cooldown": "10s"
+      }
+    },
+    {
+      "id": "selenwright-b",
+      "endpoint": "http://selenwright-b:4444",
+      "region": "local-b",
+      "weight": 1,
+      "protocols": [
+        "webdriver",
+        "playwright"
+      ],
+      "health": {
+        "enabled": true,
+        "failure_threshold": 2,
+        "cooldown": "10s"
+      }
+    }
+  ],
+  "admin": {
+    "token_ref": "env:GRIDLANE_ADMIN_TOKEN"
+  }
+}

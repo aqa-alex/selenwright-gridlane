@@ -1,0 +1,6 @@
+.git
+dist
+coverage.out
+router.json
+*.test
+*.log
