@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +236,53 @@ func TestNewHandlerPlaywrightWithoutGuestReturns401(t *testing.T) {
 	}
 	if got := rec.Header().Get("WWW-Authenticate"); got == "" {
 		t.Fatal("WWW-Authenticate header is empty, want Basic challenge")
+	}
+}
+
+func TestReloadingHandlerReloadIsFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/router.json"
+	validConfig := `{
+	  "version": 1,
+	  "users": [{"name": "alice", "password_ref": "env:ALICE_PASSWORD", "quota": {"max_sessions": 2}}],
+	  "catalog": {"browsers": [{"name": "chrome", "versions": ["stable"], "protocols": ["webdriver"]}]},
+	  "backend_pools": [{"id": "sw-local", "endpoint": "http://127.0.0.1:4444", "region": "local", "weight": 1, "protocols": ["webdriver"]}],
+	  "admin": {"token_ref": "env:GRIDLANE_ADMIN_TOKEN"}
+	}`
+	if err := os.WriteFile(path, []byte(validConfig), 0o600); err != nil {
+		t.Fatalf("write valid config: %v", err)
+	}
+
+	t.Setenv("ALICE_PASSWORD", "wonderland")
+	t.Setenv("GRIDLANE_ADMIN_TOKEN", "root-token")
+
+	handler, err := NewReloadingHandler(Options{ConfigPath: path})
+	if err != nil {
+		t.Fatalf("NewReloadingHandler() error = %v", err)
+	}
+
+	before := handler.Snapshot()
+	if before.Status == "" {
+		t.Fatal("initial Snapshot.Status is empty")
+	}
+
+	if err := os.WriteFile(path, []byte(`{"version": 1, "broken`), 0o600); err != nil {
+		t.Fatalf("write broken config: %v", err)
+	}
+	if err := handler.Reload(); err == nil {
+		t.Fatal("Reload() error = nil, want parse error")
+	}
+
+	after := handler.Snapshot()
+	if after.Service != before.Service || len(after.Backends) != len(before.Backends) {
+		t.Fatalf("Reload must be fail-closed: snapshot changed from %+v to %+v", before, after)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ping after failed reload = %d, want 200 (previous runtime must stay live)", rec.Code)
 	}
 }
 

@@ -1,6 +1,7 @@
 package health
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -169,6 +170,51 @@ func TestManagerSnapshotClearsExpiredCooldown(t *testing.T) {
 	}
 	if !snap.Available {
 		t.Fatal("post-cooldown Available = false, want true")
+	}
+}
+
+func TestManagerConcurrentReports(t *testing.T) {
+	// Stresses Manager under -race: N goroutines hammer ReportFailure,
+	// ReportSuccess and Available at once. Passes means the mutex keeps the
+	// backend map and state counters coherent.
+	pools := make([]config.BackendPool, 0, 4)
+	for _, id := range []string{"a", "b", "c", "d"} {
+		pools = append(pools, config.BackendPool{
+			ID:        id,
+			Endpoint:  "http://127.0.0.1:4444",
+			Region:    "eu",
+			Protocols: []config.Protocol{config.ProtocolWebDriver},
+			Health:    config.HealthPolicy{Enabled: true, FailureThreshold: 3, Cooldown: "100ms"},
+		})
+	}
+	manager := NewManager(pools)
+
+	const workers = 16
+	const iterations = 200
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for worker := 0; worker < workers; worker++ {
+		go func(w int) {
+			defer wg.Done()
+			id := pools[w%len(pools)].ID
+			for i := 0; i < iterations; i++ {
+				switch i % 3 {
+				case 0:
+					manager.ReportFailure(id)
+				case 1:
+					manager.ReportSuccess(id)
+				case 2:
+					_ = manager.Available(id)
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+
+	// Sanity: every pool must still be addressable from the public API.
+	snap := manager.Snapshot()
+	if len(snap.Backends) != len(pools) {
+		t.Fatalf("Snapshot.Backends = %d, want %d", len(snap.Backends), len(pools))
 	}
 }
 
