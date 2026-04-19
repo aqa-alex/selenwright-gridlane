@@ -12,6 +12,14 @@ import (
 const Prefix = "r1"
 
 // TokenForBackend derives a stable, opaque route token from a backend id.
+//
+// The HMAC key below is a domain separator, not a secret: it hides backend
+// ids from clients and makes tokens look random, but it is not signed or
+// verified. Two independent gridlane deployments sharing backend ids will
+// produce colliding tokens. If federated / per-deployment isolation becomes
+// a requirement (technical debt, tracked for a future release), accept a
+// secret key via `-route-salt` with the existing env:/file: secret-ref
+// plumbing and swap it in here.
 func TokenForBackend(backendID string) (string, error) {
 	if backendID == "" {
 		return "", fmt.Errorf("backend id is required")
