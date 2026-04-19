@@ -80,6 +80,12 @@ func (m *Manager) ReportSuccess(backendID string) {
 	if !ok {
 		return
 	}
+	if !state.enabled {
+		return
+	}
+	if !state.unhealthyUntil.IsZero() && state.unhealthyUntil.After(m.now()) {
+		return
+	}
 	state.failures = 0
 	state.unhealthyUntil = time.Time{}
 }
@@ -134,6 +140,39 @@ type Snapshot struct {
 	Service  string            `json:"service"`
 	Status   string            `json:"status"`
 	Backends []BackendSnapshot `json:"backends"`
+}
+
+// PublicSnapshot is the response shape returned to unauthenticated callers of
+// /status. It intentionally omits per-backend endpoints, regions, protocol
+// lists, and failure thresholds so that the public surface does not leak the
+// backend topology or the router's health policy.
+type PublicSnapshot struct {
+	Service        string `json:"service"`
+	Status         string `json:"status"`
+	BackendCount   int    `json:"backend_count"`
+	AvailableCount int    `json:"available_count"`
+}
+
+func (m *Manager) PublicSnapshot() PublicSnapshot {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := m.now()
+	available := 0
+	backends := make([]BackendSnapshot, 0, len(m.backends))
+	for _, state := range m.backends {
+		snapshot := BackendSnapshot{Available: state.available(now)}
+		if snapshot.Available {
+			available++
+		}
+		backends = append(backends, snapshot)
+	}
+	return PublicSnapshot{
+		Service:        "gridlane",
+		Status:         overallStatus(backends),
+		BackendCount:   len(backends),
+		AvailableCount: available,
+	}
 }
 
 type BackendSnapshot struct {

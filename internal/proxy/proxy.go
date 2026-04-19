@@ -236,13 +236,7 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if resp.StatusCode >= 500 {
-		h.reportFailure(backend.ID)
-		h.recordProxyRequest(config.ProtocolWebDriver, backend.ID, "failure", time.Since(started))
-	} else {
-		h.reportSuccess(backend.ID)
-		h.recordProxyRequest(config.ProtocolWebDriver, backend.ID, "success", time.Since(started))
-	}
+	h.classifyAndRecord(config.ProtocolWebDriver, backend.ID, resp.StatusCode, started)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		copyResponseHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
@@ -482,13 +476,7 @@ func (h *Handler) reverseProxy(w http.ResponseWriter, r *http.Request, backend c
 		},
 		Transport: h.transport,
 		ModifyResponse: func(resp *http.Response) error {
-			if resp.StatusCode >= 500 {
-				h.reportFailure(backend.ID)
-				h.recordProxyRequest(protocol, backend.ID, "failure", time.Since(started))
-			} else {
-				h.reportSuccess(backend.ID)
-				h.recordProxyRequest(protocol, backend.ID, "success", time.Since(started))
-			}
+			h.classifyAndRecord(protocol, backend.ID, resp.StatusCode, started)
 			if resp.StatusCode == http.StatusSwitchingProtocols && protocol == config.ProtocolPlaywright {
 				h.recordWebSocketSession(backend.ID, "upgraded")
 			}
@@ -509,6 +497,39 @@ func (h *Handler) applyBackendCredentials(req *http.Request, backendID string) {
 		return
 	}
 	req.SetBasicAuth(credential.Username, credential.Password)
+}
+
+// classifyUpstreamStatus maps an HTTP status returned by the upstream to a
+// Prometheus outcome label and decides whether it should degrade backend
+// health. 5xx, 408/425/429 and upstream-side auth failures (401/403 — likely
+// backend-credentials drift) trip the backend; other 4xx are the caller's
+// problem ("client_error") and leave health untouched; 2xx/3xx are "success".
+func classifyUpstreamStatus(code int) (outcome string, unhealthy bool) {
+	switch {
+	case code >= 500:
+		return "failure", true
+	case code == http.StatusRequestTimeout,
+		code == http.StatusTooEarly,
+		code == http.StatusTooManyRequests,
+		code == http.StatusUnauthorized,
+		code == http.StatusForbidden:
+		return "failure", true
+	case code >= 400:
+		return "client_error", false
+	default:
+		return "success", false
+	}
+}
+
+func (h *Handler) classifyAndRecord(protocol config.Protocol, backendID string, status int, started time.Time) {
+	outcome, unhealthy := classifyUpstreamStatus(status)
+	switch {
+	case unhealthy:
+		h.reportFailure(backendID)
+	case outcome == "success":
+		h.reportSuccess(backendID)
+	}
+	h.recordProxyRequest(protocol, backendID, outcome, time.Since(started))
 }
 
 func (h *Handler) reportSuccess(backendID string) {

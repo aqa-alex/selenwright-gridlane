@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gridlane/internal/config"
@@ -42,6 +43,15 @@ func (EnvFileResolver) Resolve(ref string) (string, error) {
 	}
 	if strings.HasPrefix(ref, "file:") {
 		path := strings.TrimPrefix(ref, "file:")
+		if path == "" {
+			return "", fmt.Errorf("secret file reference is empty")
+		}
+		if !filepath.IsAbs(path) {
+			return "", fmt.Errorf("secret file path %q must be absolute", path)
+		}
+		if filepath.Clean(path) != path {
+			return "", fmt.Errorf("secret file path %q must be cleaned (no .. or redundant separators)", path)
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return "", err

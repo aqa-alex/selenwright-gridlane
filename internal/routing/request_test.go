@@ -144,6 +144,44 @@ func TestCatalogSupportsVersionAndPlatformPrefix(t *testing.T) {
 	}
 }
 
+func TestCatalogPrefixMatchIsOneWay(t *testing.T) {
+	catalog := config.Catalog{Browsers: []config.Browser{{
+		Name:      "chrome",
+		Versions:  []string{"120"},
+		Platforms: []string{"linux"},
+		Protocols: []config.Protocol{config.ProtocolWebDriver},
+	}}}
+
+	req := Request{
+		Protocol:    config.ProtocolWebDriver,
+		BrowserName: "chrome",
+		Version:     "12",
+		Platform:    "linux",
+	}
+	if CatalogSupports(catalog, req) {
+		t.Fatal("CatalogSupports(version=12, catalog=[120]) = true, want false: client prefix must not match wider catalog value")
+	}
+}
+
+func TestCatalogPrefixMatchAcceptsNarrowerClient(t *testing.T) {
+	catalog := config.Catalog{Browsers: []config.Browser{{
+		Name:      "chrome",
+		Versions:  []string{"12"},
+		Platforms: []string{"linux"},
+		Protocols: []config.Protocol{config.ProtocolWebDriver},
+	}}}
+
+	req := Request{
+		Protocol:    config.ProtocolWebDriver,
+		BrowserName: "chrome",
+		Version:     "120.0.6099.109",
+		Platform:    "linux-amd64",
+	}
+	if !CatalogSupports(catalog, req) {
+		t.Fatal("CatalogSupports(version=120.0..., catalog=[12]) = false, want true: client value widening catalog prefix must match")
+	}
+}
+
 func TestSelectorRejectsUnsupportedBrowser(t *testing.T) {
 	selector := NewSelector(sampleCatalog(), []config.BackendPool{
 		{ID: "local", Region: "eu", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},

@@ -2,6 +2,9 @@ package auth
 
 import (
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"gridlane/internal/config"
@@ -115,6 +118,69 @@ func TestScopeForPath(t *testing.T) {
 		if got := ScopeForPath(path); got != want {
 			t.Fatalf("ScopeForPath(%q) = %s, want %s", path, got, want)
 		}
+	}
+}
+
+func TestEnvFileResolverRejectsNonAbsolutePath(t *testing.T) {
+	_, err := (EnvFileResolver{}).Resolve("file:relative/secret.txt")
+	if err == nil {
+		t.Fatal("Resolve(relative path) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("Resolve(relative) error = %v, want absolute-path error", err)
+	}
+}
+
+func TestEnvFileResolverRejectsTraversal(t *testing.T) {
+	tmp := t.TempDir()
+	outside := filepath.Dir(tmp)
+	_, err := (EnvFileResolver{}).Resolve("file:" + outside + "/../secret.txt")
+	if err == nil {
+		t.Fatal("Resolve(traversal path) error = nil, want cleaned-path error")
+	}
+	if !strings.Contains(err.Error(), "cleaned") {
+		t.Fatalf("Resolve(traversal) error = %v, want cleaned-path error", err)
+	}
+}
+
+func TestEnvFileResolverReadsAbsoluteCleanPath(t *testing.T) {
+	tmp := t.TempDir()
+	secret := filepath.Join(tmp, "secret.txt")
+	if err := os.WriteFile(secret, []byte("hunter2\n"), 0o600); err != nil {
+		t.Fatalf("write secret: %v", err)
+	}
+	got, err := (EnvFileResolver{}).Resolve("file:" + secret)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got != "hunter2" {
+		t.Fatalf("Resolve() = %q, want hunter2", got)
+	}
+}
+
+func TestValidateSecretRefRejectsRelativeFilePath(t *testing.T) {
+	err := config.ValidateSecretRef("admin.token_ref", "file:etc/passwd")
+	if err == nil {
+		t.Fatal("ValidateSecretRef(relative) = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("ValidateSecretRef(relative) error = %v, want absolute-path error", err)
+	}
+}
+
+func TestValidateSecretRefRejectsUnclean(t *testing.T) {
+	err := config.ValidateSecretRef("admin.token_ref", "file:/etc/../etc/passwd")
+	if err == nil {
+		t.Fatal("ValidateSecretRef(..) = nil, want cleaned-path error")
+	}
+	if !strings.Contains(err.Error(), "cleaned") {
+		t.Fatalf("ValidateSecretRef(..) error = %v, want cleaned-path error", err)
+	}
+}
+
+func TestValidateSecretRefAcceptsAbsoluteCleanPath(t *testing.T) {
+	if err := config.ValidateSecretRef("admin.token_ref", "file:/run/secrets/admin_token"); err != nil {
+		t.Fatalf("ValidateSecretRef(abs clean) error = %v, want nil", err)
 	}
 }
 

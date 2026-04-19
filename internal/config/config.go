@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -296,7 +297,17 @@ func ValidateSecretRef(path string, ref string) error {
 	if strings.HasPrefix(ref, "env:") && strings.TrimPrefix(ref, "env:") != "" {
 		return nil
 	}
-	if strings.HasPrefix(ref, "file:") && strings.TrimPrefix(ref, "file:") != "" {
+	if strings.HasPrefix(ref, "file:") {
+		filePath := strings.TrimPrefix(ref, "file:")
+		if filePath == "" {
+			return fmt.Errorf("%s must use env: or file: secret reference", path)
+		}
+		if !filepath.IsAbs(filePath) {
+			return fmt.Errorf("%s file: secret path must be absolute, got %q", path, filePath)
+		}
+		if filepath.Clean(filePath) != filePath {
+			return fmt.Errorf("%s file: secret path must be cleaned (no .. or trailing slashes), got %q", path, filePath)
+		}
 		return nil
 	}
 	return fmt.Errorf("%s must use env: or file: secret reference", path)

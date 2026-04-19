@@ -632,3 +632,108 @@ func (h *trackingHealth) ReportFailure(backendID string) {
 	}
 	h.failures[backendID]++
 }
+
+func TestClassifyUpstreamStatus(t *testing.T) {
+	cases := []struct {
+		code      int
+		outcome   string
+		unhealthy bool
+	}{
+		{100, "success", false},
+		{200, "success", false},
+		{204, "success", false},
+		{301, "success", false},
+		{400, "client_error", false},
+		{401, "failure", true},
+		{403, "failure", true},
+		{404, "client_error", false},
+		{408, "failure", true},
+		{409, "client_error", false},
+		{422, "client_error", false},
+		{425, "failure", true},
+		{429, "failure", true},
+		{499, "client_error", false},
+		{500, "failure", true},
+		{502, "failure", true},
+		{503, "failure", true},
+		{504, "failure", true},
+		{599, "failure", true},
+	}
+	for _, tc := range cases {
+		outcome, unhealthy := classifyUpstreamStatus(tc.code)
+		if outcome != tc.outcome || unhealthy != tc.unhealthy {
+			t.Errorf("classifyUpstreamStatus(%d) = (%q, %v), want (%q, %v)",
+				tc.code, outcome, unhealthy, tc.outcome, tc.unhealthy)
+		}
+	}
+}
+
+func TestCreateSessionTreats429AsFailure(t *testing.T) {
+	health := &trackingHealth{available: map[string]bool{"sw-a": true}}
+	metrics := &trackingMetrics{}
+	handler := newTestHandler(t, testConfig("http://127.0.0.1:4444"), Options{
+		Health:  health,
+		Metrics: metrics,
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusTooManyRequests,
+				Header:     http.Header{"Content-Type": []string{"text/plain"}},
+				Body:       io.NopCloser(strings.NewReader("slow down")),
+			}, nil
+		}),
+	})
+	req := httptest.NewRequest(http.MethodPost, "http://gridlane.test/wd/hub/session", strings.NewReader(`{
+		"desiredCapabilities": {"browserName":"chrome"}
+	}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusTooManyRequests)
+	}
+	if health.failures["sw-a"] != 1 {
+		t.Fatalf("failure count = %d, want 1 (429 must trip health)", health.failures["sw-a"])
+	}
+	if health.successes["sw-a"] != 0 {
+		t.Fatalf("success count = %d, want 0", health.successes["sw-a"])
+	}
+	if got := metrics.proxyRequests["webdriver/sw-a/failure"]; got != 1 {
+		t.Fatalf("failure metric = %d, want 1", got)
+	}
+}
+
+func TestCreateSessionTreats404AsClientError(t *testing.T) {
+	health := &trackingHealth{available: map[string]bool{"sw-a": true}}
+	metrics := &trackingMetrics{}
+	handler := newTestHandler(t, testConfig("http://127.0.0.1:4444"), Options{
+		Health:  health,
+		Metrics: metrics,
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Header:     http.Header{"Content-Type": []string{"text/plain"}},
+				Body:       io.NopCloser(strings.NewReader("no such browser")),
+			}, nil
+		}),
+	})
+	req := httptest.NewRequest(http.MethodPost, "http://gridlane.test/wd/hub/session", strings.NewReader(`{
+		"desiredCapabilities": {"browserName":"chrome"}
+	}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if health.failures["sw-a"] != 0 {
+		t.Fatalf("failure count = %d, want 0 (404 is client error, not backend fault)", health.failures["sw-a"])
+	}
+	if health.successes["sw-a"] != 0 {
+		t.Fatalf("success count = %d, want 0 (client_error does not affect health)", health.successes["sw-a"])
+	}
+	if got := metrics.proxyRequests["webdriver/sw-a/client_error"]; got != 1 {
+		t.Fatalf("client_error metric = %d, want 1", got)
+	}
+}

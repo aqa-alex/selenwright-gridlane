@@ -461,7 +461,7 @@ func assertHostInfo(t *testing.T, routerURL string, publicID string, backendURL 
 func assertStatus(t *testing.T, routerURL string, wantBackends int) {
 	t.Helper()
 	body := requestOK(t, http.MethodGet, routerURL+"/status", "", noAuth)
-	var snapshot health.Snapshot
+	var snapshot health.PublicSnapshot
 	if err := json.Unmarshal(body, &snapshot); err != nil {
 		t.Fatalf("decode status: %v", err)
 	}
@@ -471,8 +471,21 @@ func assertStatus(t *testing.T, routerURL string, wantBackends int) {
 	if snapshot.Status != "ok" {
 		t.Fatalf("status = %q, want ok", snapshot.Status)
 	}
-	if len(snapshot.Backends) != wantBackends {
-		t.Fatalf("status backends = %d, want %d", len(snapshot.Backends), wantBackends)
+	if snapshot.BackendCount != wantBackends {
+		t.Fatalf("status backend_count = %d, want %d", snapshot.BackendCount, wantBackends)
+	}
+	if snapshot.AvailableCount != wantBackends {
+		t.Fatalf("status available_count = %d, want %d", snapshot.AvailableCount, wantBackends)
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("decode status raw: %v", err)
+	}
+	for _, forbidden := range []string{"backends", "endpoint", "region", "protocols", "failures", "failure_threshold", "unhealthy_until"} {
+		if _, leaked := raw[forbidden]; leaked {
+			t.Fatalf("/status must not expose %q; got body: %s", forbidden, body)
+		}
 	}
 }
 

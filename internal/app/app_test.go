@@ -212,8 +212,17 @@ func TestNewHandlerSideEndpointsRequireBasicAuthEvenWithGuest(t *testing.T) {
 	}
 }
 
-func TestNewHandlerPlaywrightUsesUserScope(t *testing.T) {
-	handler := NewHandler(Options{}, newTestRuntime(t))
+func TestNewHandlerPlaywrightWithoutGuestReturns401(t *testing.T) {
+	runtime := newTestRuntime(t)
+	cfg := runtime.Catalog.Config()
+	cfg.Guest = nil
+	policy, err := auth.NewPolicy(cfg, auth.EnvFileResolver{})
+	if err != nil {
+		t.Fatalf("auth.NewPolicy() error = %v", err)
+	}
+	runtime.Auth = policy
+
+	handler := NewHandler(Options{}, runtime)
 	req := httptest.NewRequest(http.MethodGet, "/playwright/chrome/stable", nil)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "websocket")
@@ -221,8 +230,11 @@ func TestNewHandlerPlaywrightUsesUserScope(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusBadRequest)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status code = %d, want 401 (no guest, no BasicAuth)", rec.Code)
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got == "" {
+		t.Fatal("WWW-Authenticate header is empty, want Basic challenge")
 	}
 }
 

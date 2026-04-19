@@ -233,12 +233,16 @@ func CatalogSupports(catalog config.Catalog, req Request) bool {
 	return false
 }
 
+// prefixMatchAny reports whether the client-supplied requested value matches
+// any catalog-declared value as a left-anchored, case-insensitive prefix.
+// Matching is one-way: the requested string must start with a catalog value
+// (the operator declares the coarse identifier, the client narrows it).
+// Reverse-direction matches are rejected so that catalog entry "120" cannot
+// spuriously satisfy a client asking for "12".
 func prefixMatchAny(values []string, requested string) bool {
+	requestedLower := strings.ToLower(requested)
 	for _, value := range values {
-		if strings.HasPrefix(strings.ToLower(requested), strings.ToLower(value)) {
-			return true
-		}
-		if strings.HasPrefix(strings.ToLower(value), strings.ToLower(requested)) {
+		if strings.HasPrefix(requestedLower, strings.ToLower(value)) {
 			return true
 		}
 	}

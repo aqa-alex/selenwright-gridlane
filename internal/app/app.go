@@ -192,12 +192,12 @@ func NewReloadingHandler(opts Options) (*ReloadingHandler, error) {
 }
 
 func (h *ReloadingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	current := h.current.Load()
-	if current == nil {
+	handler, ok := h.current.Load().(http.Handler)
+	if !ok || handler == nil {
 		http.Error(w, "runtime is not loaded", http.StatusServiceUnavailable)
 		return
 	}
-	current.(http.Handler).ServeHTTP(w, r)
+	handler.ServeHTTP(w, r)
 }
 
 func (h *ReloadingHandler) Reload() error {
@@ -212,11 +212,11 @@ func (h *ReloadingHandler) Reload() error {
 }
 
 func (h *ReloadingHandler) Snapshot() health.Snapshot {
-	current := h.currentHealth.Load()
-	if current == nil {
+	mgr, ok := h.currentHealth.Load().(*health.Manager)
+	if !ok || mgr == nil {
 		return health.Snapshot{Service: serviceName, Status: "degraded"}
 	}
-	return current.(*health.Manager).Snapshot()
+	return mgr.Snapshot()
 }
 
 func (h *ReloadingHandler) MetricsHandler() http.Handler {
@@ -260,7 +260,7 @@ func NewHandler(opts Options, runtime Runtime) http.Handler {
 		})
 	}))
 	mux.HandleFunc("/status", getOnly(func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, runtime.Health.Snapshot())
+		writeJSON(w, http.StatusOK, runtime.Health.PublicSnapshot())
 	}))
 	mux.HandleFunc("/config", getOnly(func(w http.ResponseWriter, r *http.Request) {
 		if !authorize(w, r, runtime.Auth, auth.ScopeAdmin) {
