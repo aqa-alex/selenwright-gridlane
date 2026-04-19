@@ -114,6 +114,13 @@ func (m *Manager) Snapshot() Snapshot {
 	now := m.now()
 	backends := make([]BackendSnapshot, 0, len(m.backends))
 	for _, state := range m.backends {
+		// Cooldown expired — clear state so subsequent success no longer
+		// looks like post-cooldown recovery; keeps debug and log output
+		// consistent with the availability decision.
+		if !state.unhealthyUntil.IsZero() && !state.unhealthyUntil.After(now) {
+			state.unhealthyUntil = time.Time{}
+			state.failures = 0
+		}
 		snapshot := BackendSnapshot{
 			ID:               state.id,
 			Region:           state.region,

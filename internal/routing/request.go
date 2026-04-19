@@ -21,18 +21,40 @@ type Request struct {
 	Region      string
 }
 
-func ParseWebDriverNewSession(r io.Reader) (Request, error) {
+// ParseWebDriverNewSession decodes a W3C or JsonWire new-session payload and
+// returns the ordered list of Request candidates the client is willing to
+// accept. W3C firstMatch is expanded: each firstMatch element merged on top of
+// alwaysMatch yields a distinct Request. The caller (Selector.SelectFirst)
+// picks the first candidate the catalog can honor — this preserves client
+// fallback intent (e.g. [chrome, firefox]) instead of collapsing it to the
+// first entry.
+func ParseWebDriverNewSession(r io.Reader) ([]Request, error) {
 	var payload map[string]any
 	decoder := json.NewDecoder(io.LimitReader(r, 1<<20))
 	if err := decoder.Decode(&payload); err != nil {
-		return Request{}, fmt.Errorf("decode webdriver session request: %w", err)
+		return nil, fmt.Errorf("decode webdriver session request: %w", err)
 	}
 
-	caps, err := capabilitiesFromPayload(payload)
+	capsList, err := capabilityCandidatesFromPayload(payload)
 	if err != nil {
-		return Request{}, err
+		return nil, err
 	}
 
+	requests := make([]Request, 0, len(capsList))
+	for _, caps := range capsList {
+		req := requestFromCapabilities(caps)
+		if req.BrowserName == "" {
+			continue
+		}
+		requests = append(requests, req)
+	}
+	if len(requests) == 0 {
+		return nil, fmt.Errorf("browserName or deviceName is required")
+	}
+	return requests, nil
+}
+
+func requestFromCapabilities(caps map[string]any) Request {
 	req := Request{
 		Protocol:    config.ProtocolWebDriver,
 		BrowserName: stringValue(caps, "browserName"),
@@ -44,10 +66,7 @@ func ParseWebDriverNewSession(r io.Reader) (Request, error) {
 	if req.BrowserName == "" && req.DeviceName != "" {
 		req.BrowserName = req.DeviceName
 	}
-	if req.BrowserName == "" {
-		return Request{}, fmt.Errorf("browserName or deviceName is required")
-	}
-	return req, nil
+	return req
 }
 
 func ParsePlaywrightPath(path string) (Request, error) {
@@ -66,33 +85,52 @@ func ParsePlaywrightPath(path string) (Request, error) {
 	}, nil
 }
 
-func capabilitiesFromPayload(payload map[string]any) (map[string]any, error) {
+// capabilityCandidatesFromPayload expands W3C capabilities into an ordered
+// list: each candidate is alwaysMatch with a single firstMatch entry merged
+// over it. When firstMatch is absent the slice has exactly one entry. Legacy
+// JsonWire desiredCapabilities also yields a single entry.
+func capabilityCandidatesFromPayload(payload map[string]any) ([]map[string]any, error) {
 	if capabilities, ok := objectValue(payload, "capabilities"); ok {
-		merged := map[string]any{}
-		if alwaysMatch, ok := objectValue(capabilities, "alwaysMatch"); ok {
-			for key, value := range alwaysMatch {
+		alwaysMatch, _ := objectValue(capabilities, "alwaysMatch")
+		firstMatch, hasFirstMatch := arrayValue(capabilities, "firstMatch")
+
+		if !hasFirstMatch || len(firstMatch) == 0 {
+			base := copyObject(alwaysMatch)
+			if len(base) == 0 {
+				return []map[string]any{capabilities}, nil
+			}
+			return []map[string]any{base}, nil
+		}
+
+		candidates := make([]map[string]any, 0, len(firstMatch))
+		for _, candidate := range firstMatch {
+			caps, ok := candidate.(map[string]any)
+			if !ok {
+				continue
+			}
+			merged := copyObject(alwaysMatch)
+			for key, value := range caps {
 				merged[key] = value
 			}
+			candidates = append(candidates, merged)
 		}
-		if firstMatch, ok := arrayValue(capabilities, "firstMatch"); ok {
-			for _, candidate := range firstMatch {
-				if caps, ok := candidate.(map[string]any); ok {
-					for key, value := range caps {
-						merged[key] = value
-					}
-					return merged, nil
-				}
-			}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("firstMatch contains no usable capability entries")
 		}
-		if len(merged) > 0 {
-			return merged, nil
-		}
-		return capabilities, nil
+		return candidates, nil
 	}
 	if desired, ok := objectValue(payload, "desiredCapabilities"); ok {
-		return desired, nil
+		return []map[string]any{desired}, nil
 	}
 	return nil, fmt.Errorf("capabilities or desiredCapabilities is required")
+}
+
+func copyObject(src map[string]any) map[string]any {
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func objectValue(values map[string]any, key string) (map[string]any, bool) {
@@ -113,17 +151,18 @@ func arrayValue(values map[string]any, key string) ([]any, bool) {
 	return array, ok
 }
 
+// stringValue extracts a string capability by key. Non-string values (bool,
+// number, object) are treated as absent rather than silently stringified —
+// "browserName":true must not be interpreted as the literal browser "true".
 func stringValue(values map[string]any, key string) string {
 	value, ok := values[key]
 	if !ok {
 		return ""
 	}
-	switch typed := value.(type) {
-	case string:
+	if typed, ok := value.(string); ok {
 		return typed
-	default:
-		return fmt.Sprint(typed)
 	}
+	return ""
 }
 
 func firstStringValue(values map[string]any, keys ...string) string {
@@ -152,6 +191,26 @@ func NewSelector(catalog config.Catalog, pools []config.BackendPool, seed uint64
 		pools:   append([]config.BackendPool(nil), pools...),
 		rand:    rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)),
 	}
+}
+
+// SelectFirst tries each candidate Request in order and returns the first one
+// for which both the catalog and an available backend pool can be matched.
+// When every candidate fails the last encountered error is returned so the
+// caller can surface a meaningful diagnosis. Also returns the chosen Request
+// so the caller can record the protocol / region actually served.
+func (s *Selector) SelectFirst(requests []Request, health BackendHealth) (config.BackendPool, Request, error) {
+	if len(requests) == 0 {
+		return config.BackendPool{}, Request{}, fmt.Errorf("no candidate requests")
+	}
+	var lastErr error
+	for _, req := range requests {
+		pool, err := s.Select(req, health)
+		if err == nil {
+			return pool, req, nil
+		}
+		lastErr = err
+	}
+	return config.BackendPool{}, Request{}, lastErr
 }
 
 func (s *Selector) Select(req Request, health BackendHealth) (config.BackendPool, error) {

@@ -27,8 +27,21 @@ const (
 	maxProxyBodyBytes           = 8 << 20
 	defaultProxyMaxConnsPerHost = 128
 
+	// headerSelenwrightExternalSessionID is attached to the Playwright
+	// WebSocket upgrade request so upstream selenwright uses the router-
+	// supplied public session ID as its app.sessions key. Requires selenwright
+	// with feat/accept-external-playwright-session-id merged — older
+	// selenwright builds ignore the header and break side endpoints.
 	headerSelenwrightExternalSessionID = "X-Selenwright-External-Session-ID"
-	playwrightExternalSessionPrefix    = "pw_"
+
+	// headerSelenwrightSessionID is attached by gridlane to the 101
+	// Switching Protocols response so Playwright clients can discover the
+	// public session ID (encoded r1_<routeToken>_<external>) and address
+	// side endpoints (/vnc, /video, /logs, ...) afterwards. selenwright
+	// itself does not emit this header — it is a router↔client convention.
+	headerSelenwrightSessionID = "X-Selenwright-Session-ID"
+
+	playwrightExternalSessionPrefix = "pw_"
 )
 
 type Health interface {
@@ -191,7 +204,7 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 		return
 	}
-	routeRequest, err := routing.ParseWebDriverNewSession(bytes.NewReader(body))
+	candidates, err := routing.ParseWebDriverNewSession(bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -202,7 +215,7 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	backend, err := h.selector.Select(routeRequest, h.health)
+	backend, _, err := h.selector.SelectFirst(candidates, h.health)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -317,7 +330,7 @@ func (h *Handler) proxyPlaywright(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Header.Set(headerSelenwrightExternalSessionID, publicSessionID)
 	h.recordWebSocketSession(backend.ID, "started")
-	h.reverseProxy(w, r, backend, r.URL.Path, config.ProtocolPlaywright)
+	h.reverseProxyWithResponseSession(w, r, backend, r.URL.Path, config.ProtocolPlaywright, publicSessionID)
 }
 
 func (h *Handler) proxySideEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -361,6 +374,12 @@ func (h *Handler) proxySideEndpoint(w http.ResponseWriter, r *http.Request) {
 	upstreamSessionPart := upstreamSessionID + suffix
 	protocol := config.ProtocolWebDriver
 	if strings.HasPrefix(upstreamSessionID, playwrightExternalSessionPrefix) {
+		// Playwright sessions are registered in upstream selenwright under the
+		// full public ID (r1_<routeToken>_pw_<hex>) because we pass it through
+		// X-Selenwright-External-Session-ID on the upgrade — so side endpoints
+		// must address the upstream with the public ID, not the decoded
+		// upstream part. Requires selenwright with
+		// feat/accept-external-playwright-session-id merged.
 		upstreamSessionPart = publicSessionID + suffix
 		protocol = config.ProtocolPlaywright
 	}
@@ -456,6 +475,14 @@ func (h *Handler) newUpstreamRequest(ctx context.Context, original *http.Request
 }
 
 func (h *Handler) reverseProxy(w http.ResponseWriter, r *http.Request, backend config.BackendPool, upstreamPath string, protocol config.Protocol) {
+	h.reverseProxyWithResponseSession(w, r, backend, upstreamPath, protocol, "")
+}
+
+// reverseProxyWithResponseSession adds a public session ID to the upgrade
+// response on Playwright WS handoff. See [headerSelenwrightSessionID] — the
+// header is the router↔client contract for discovering the encoded session
+// id; upstream selenwright never emits it.
+func (h *Handler) reverseProxyWithResponseSession(w http.ResponseWriter, r *http.Request, backend config.BackendPool, upstreamPath string, protocol config.Protocol, publicSessionID string) {
 	target, err := url.Parse(backend.Endpoint)
 	if err != nil {
 		http.Error(w, "invalid backend endpoint", http.StatusBadGateway)
@@ -478,6 +505,9 @@ func (h *Handler) reverseProxy(w http.ResponseWriter, r *http.Request, backend c
 		ModifyResponse: func(resp *http.Response) error {
 			h.classifyAndRecord(protocol, backend.ID, resp.StatusCode, started)
 			if resp.StatusCode == http.StatusSwitchingProtocols && protocol == config.ProtocolPlaywright {
+				if publicSessionID != "" {
+					resp.Header.Set(headerSelenwrightSessionID, publicSessionID)
+				}
 				h.recordWebSocketSession(backend.ID, "upgraded")
 			}
 			return nil

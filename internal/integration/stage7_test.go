@@ -640,7 +640,12 @@ func (b *fakeSelenwright) handlePlaywrightUpgrade(w http.ResponseWriter, r *http
 	if protocol := r.Header.Get("Sec-WebSocket-Protocol"); protocol != "" {
 		_, _ = fmt.Fprintf(rw, "Sec-WebSocket-Protocol: %s\r\n", protocol)
 	}
-	_, _ = fmt.Fprintf(rw, "X-Selenwright-Session-ID: %s\r\n", r.Header.Get("X-Selenwright-External-Session-ID"))
+	// Real selenwright does NOT set X-Selenwright-Session-ID on the upgrade
+	// response — it stores the session under whatever value came in via
+	// X-Selenwright-External-Session-ID (or its own random ID if absent).
+	// gridlane is responsible for emitting X-Selenwright-Session-ID back to
+	// the client so it can address side endpoints. Keeping this mock truthful
+	// forces the gridlane ModifyResponse path to carry its weight.
 	_, _ = fmt.Fprintf(rw, "\r\n")
 	if err := rw.Flush(); err != nil {
 		return

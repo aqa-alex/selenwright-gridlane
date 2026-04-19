@@ -143,6 +143,35 @@ func TestManagerDisabledHealthDoesNotTrip(t *testing.T) {
 	}
 }
 
+func TestManagerSnapshotClearsExpiredCooldown(t *testing.T) {
+	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
+	manager := NewManagerWithClock([]config.BackendPool{{
+		ID:        "sw-local",
+		Endpoint:  "http://127.0.0.1:4444",
+		Region:    "eu",
+		Protocols: []config.Protocol{config.ProtocolWebDriver},
+		Health:    config.HealthPolicy{Enabled: true, FailureThreshold: 1, Cooldown: "10s"},
+	}}, func() time.Time { return now })
+
+	manager.ReportFailure("sw-local")
+	if snap := manager.Snapshot().Backends[0]; snap.UnhealthyUntil == "" || snap.Failures != 1 {
+		t.Fatalf("mid-cooldown snapshot = %+v, want failures=1 and UnhealthyUntil set", snap)
+	}
+
+	now = now.Add(11 * time.Second)
+
+	snap := manager.Snapshot().Backends[0]
+	if snap.UnhealthyUntil != "" {
+		t.Fatalf("post-cooldown UnhealthyUntil = %q, want empty (stale state must be cleared)", snap.UnhealthyUntil)
+	}
+	if snap.Failures != 0 {
+		t.Fatalf("post-cooldown Failures = %d, want 0 after expiry cleanup", snap.Failures)
+	}
+	if !snap.Available {
+		t.Fatal("post-cooldown Available = false, want true")
+	}
+}
+
 func TestManagerDisabledHealthIgnoresReportSuccess(t *testing.T) {
 	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
 	manager := NewManagerWithClock([]config.BackendPool{{

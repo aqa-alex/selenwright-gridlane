@@ -341,7 +341,8 @@ func TestProxyPlaywrightWebSocketUpgradePreservesHeadersQuerySubprotocolAndExter
 		_, _ = fmt.Fprintf(rw, "Connection: Upgrade\r\n")
 		_, _ = fmt.Fprintf(rw, "Sec-WebSocket-Accept: %s\r\n", websocketAccept(r.Header.Get("Sec-WebSocket-Key")))
 		_, _ = fmt.Fprintf(rw, "Sec-WebSocket-Protocol: %s\r\n", r.Header.Get("Sec-WebSocket-Protocol"))
-		_, _ = fmt.Fprintf(rw, "%s: %s\r\n", "X-Selenwright-Session-ID", externalSessionID)
+		// Real selenwright does not emit X-Selenwright-Session-ID on upgrade —
+		// gridlane's ModifyResponse is responsible for that. See headerSelenwrightSessionID.
 		_, _ = fmt.Fprintf(rw, "\r\n")
 		if err := rw.Flush(); err != nil {
 			t.Errorf("flush upstream websocket handshake: %v", err)

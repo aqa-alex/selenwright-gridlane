@@ -8,7 +8,7 @@ import (
 )
 
 func TestParseWebDriverW3CAlwaysMatch(t *testing.T) {
-	req, err := ParseWebDriverNewSession(strings.NewReader(`{
+	requests, err := ParseWebDriverNewSession(strings.NewReader(`{
 		"capabilities": {
 			"alwaysMatch": {
 				"browserName": "chrome",
@@ -21,6 +21,10 @@ func TestParseWebDriverW3CAlwaysMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWebDriverNewSession() error = %v", err)
 	}
+	if len(requests) != 1 {
+		t.Fatalf("len(requests) = %d, want 1", len(requests))
+	}
+	req := requests[0]
 	if req.Protocol != config.ProtocolWebDriver {
 		t.Fatalf("Protocol = %q, want webdriver", req.Protocol)
 	}
@@ -39,7 +43,7 @@ func TestParseWebDriverW3CAlwaysMatch(t *testing.T) {
 }
 
 func TestParseWebDriverJSONWireDeviceNameFallback(t *testing.T) {
-	req, err := ParseWebDriverNewSession(strings.NewReader(`{
+	requests, err := ParseWebDriverNewSession(strings.NewReader(`{
 		"desiredCapabilities": {
 			"appium:deviceName": "iPhone 15",
 			"version": "17",
@@ -49,6 +53,10 @@ func TestParseWebDriverJSONWireDeviceNameFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWebDriverNewSession() error = %v", err)
 	}
+	if len(requests) != 1 {
+		t.Fatalf("len(requests) = %d, want 1", len(requests))
+	}
+	req := requests[0]
 	if req.BrowserName != "iPhone 15" {
 		t.Fatalf("BrowserName = %q, want device fallback", req.BrowserName)
 	}
@@ -63,24 +71,73 @@ func TestParseWebDriverJSONWireDeviceNameFallback(t *testing.T) {
 	}
 }
 
-func TestParseWebDriverW3CMergesAlwaysAndFirstMatch(t *testing.T) {
-	req, err := ParseWebDriverNewSession(strings.NewReader(`{
+func TestParseWebDriverW3CFirstMatchYieldsOrderedCandidates(t *testing.T) {
+	requests, err := ParseWebDriverNewSession(strings.NewReader(`{
 		"capabilities": {
 			"alwaysMatch": {"platformName": "linux"},
-			"firstMatch": [{"browserName": "chrome", "browserVersion": "128"}]
+			"firstMatch": [
+				{"browserName": "firefox", "browserVersion": "130"},
+				{"browserName": "chrome", "browserVersion": "128"}
+			]
 		}
 	}`))
 	if err != nil {
 		t.Fatalf("ParseWebDriverNewSession() error = %v", err)
 	}
-	if req.BrowserName != "chrome" {
-		t.Fatalf("BrowserName = %q, want chrome", req.BrowserName)
+	if len(requests) != 2 {
+		t.Fatalf("len(requests) = %d, want 2 (one per firstMatch entry)", len(requests))
 	}
-	if req.Version != "128" {
-		t.Fatalf("Version = %q, want 128", req.Version)
+	if requests[0].BrowserName != "firefox" || requests[0].Version != "130" || requests[0].Platform != "linux" {
+		t.Fatalf("candidate[0] = %+v, want firefox/130 on linux", requests[0])
 	}
-	if req.Platform != "linux" {
-		t.Fatalf("Platform = %q, want linux", req.Platform)
+	if requests[1].BrowserName != "chrome" || requests[1].Version != "128" || requests[1].Platform != "linux" {
+		t.Fatalf("candidate[1] = %+v, want chrome/128 on linux", requests[1])
+	}
+}
+
+func TestSelectorSelectFirstUsesCatalogFallback(t *testing.T) {
+	pools := []config.BackendPool{
+		{ID: "eu", Region: "eu", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},
+	}
+	selector := NewSelector(sampleCatalog(), pools, 1)
+
+	candidates := []Request{
+		{Protocol: config.ProtocolWebDriver, BrowserName: "safari"},
+		{Protocol: config.ProtocolWebDriver, BrowserName: "chrome"},
+	}
+	pool, chosen, err := selector.SelectFirst(candidates, nil)
+	if err != nil {
+		t.Fatalf("SelectFirst() error = %v", err)
+	}
+	if pool.ID != "eu" {
+		t.Fatalf("pool = %q, want eu", pool.ID)
+	}
+	if chosen.BrowserName != "chrome" {
+		t.Fatalf("chosen.BrowserName = %q, want chrome (fallback from safari)", chosen.BrowserName)
+	}
+}
+
+func TestParseWebDriverRejectsNonStringBrowserName(t *testing.T) {
+	_, err := ParseWebDriverNewSession(strings.NewReader(`{
+		"capabilities": {"alwaysMatch": {"browserName": true}}
+	}`))
+	if err == nil {
+		t.Fatal("ParseWebDriverNewSession(browserName=true) error = nil, want required error")
+	}
+}
+
+func TestSelectorSelectFirstReturnsErrorOnNoMatch(t *testing.T) {
+	pools := []config.BackendPool{
+		{ID: "eu", Region: "eu", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},
+	}
+	selector := NewSelector(sampleCatalog(), pools, 1)
+
+	candidates := []Request{
+		{Protocol: config.ProtocolWebDriver, BrowserName: "safari"},
+		{Protocol: config.ProtocolWebDriver, BrowserName: "edge"},
+	}
+	if _, _, err := selector.SelectFirst(candidates, nil); err == nil {
+		t.Fatal("SelectFirst() error = nil, want unsupported-browser error")
 	}
 }
 
