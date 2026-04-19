@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"gridlane/internal/config"
+	"gridlane/internal/sideroute"
 )
 
 const HeaderAdminToken = "X-Gridlane-Admin-Token"
@@ -151,31 +152,13 @@ func ScopeForPath(path string) Scope {
 	if path == "/config" || path == "/metrics" {
 		return ScopeAdmin
 	}
-	if isSideEndpoint(path) || strings.HasPrefix(path, "/host/") {
+	if sideroute.IsSide(path) || strings.HasPrefix(path, "/host/") {
 		return ScopeSide
 	}
 	if path == "/quota" {
 		return ScopeUser
 	}
 	return ScopePublic
-}
-
-func isSideEndpoint(path string) bool {
-	for _, prefix := range []string{
-		"/vnc/",
-		"/devtools/",
-		"/video/",
-		"/logs/",
-		"/download/",
-		"/downloads/",
-		"/clipboard/",
-		"/history/settings",
-	} {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 type Identity struct {

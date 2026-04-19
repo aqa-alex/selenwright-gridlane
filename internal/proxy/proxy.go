@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +22,7 @@ import (
 	"gridlane/internal/config"
 	"gridlane/internal/routing"
 	"gridlane/internal/sessionid"
+	"gridlane/internal/sideroute"
 )
 
 const (
@@ -420,13 +422,15 @@ func (h *Handler) hostInfo(w http.ResponseWriter, r *http.Request) {
 		port = defaultPort(endpoint.Scheme)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(HostInfo{
+	if err := json.NewEncoder(w).Encode(HostInfo{
 		Name:     endpoint.Hostname(),
 		Port:     port,
 		Count:    backend.Weight,
 		Username: "",
 		Password: "",
-	})
+	}); err != nil {
+		slog.Warn("write host info response failed", "backend", backend.ID, "err", err)
+	}
 }
 
 type HostInfo struct {
@@ -719,36 +723,11 @@ func splitWebDriverSessionPath(path string) (string, string, string, bool) {
 }
 
 func isSideEndpoint(path string) bool {
-	if path == "/history/settings" || strings.HasPrefix(path, "/history/settings/") {
-		return true
-	}
-	for _, prefix := range sidePrefixes() {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
+	return sideroute.IsSide(path)
 }
 
 func splitSidePath(path string) (string, string, bool) {
-	for _, prefix := range sidePrefixes() {
-		if strings.HasPrefix(path, prefix) {
-			return prefix, strings.TrimPrefix(path, prefix), true
-		}
-	}
-	return "", "", false
-}
-
-func sidePrefixes() []string {
-	return []string{
-		"/vnc/",
-		"/devtools/",
-		"/video/",
-		"/logs/",
-		"/download/",
-		"/downloads/",
-		"/clipboard/",
-	}
+	return sideroute.MatchPrefix(path)
 }
 
 func firstPathSegment(path string) (string, string) {

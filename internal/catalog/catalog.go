@@ -8,14 +8,24 @@ import (
 )
 
 type Catalog struct {
-	cfg config.Config
+	cfg         config.Config
+	userNames   map[string]struct{}
+	backendByID map[string]config.BackendPool
 }
 
 func New(cfg config.Config) (*Catalog, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return &Catalog{cfg: cfg}, nil
+	userNames := make(map[string]struct{}, len(cfg.Users))
+	for _, user := range cfg.Users {
+		userNames[user.Name] = struct{}{}
+	}
+	backendByID := make(map[string]config.BackendPool, len(cfg.BackendPools))
+	for _, pool := range cfg.BackendPools {
+		backendByID[pool.ID] = pool
+	}
+	return &Catalog{cfg: cfg, userNames: userNames, backendByID: backendByID}, nil
 }
 
 func (c *Catalog) Config() config.Config {
@@ -86,21 +96,16 @@ func (c *Catalog) Quota() QuotaView {
 }
 
 func (c *Catalog) UserExists(name string) bool {
-	for _, user := range c.cfg.Users {
-		if user.Name == name {
-			return true
-		}
-	}
-	return false
+	_, ok := c.userNames[name]
+	return ok
 }
 
 func (c *Catalog) BackendByID(id string) (config.BackendPool, error) {
-	for _, pool := range c.cfg.BackendPools {
-		if pool.ID == id {
-			return pool, nil
-		}
+	pool, ok := c.backendByID[id]
+	if !ok {
+		return config.BackendPool{}, fmt.Errorf("backend pool %q not found", id)
 	}
-	return config.BackendPool{}, fmt.Errorf("backend pool %q not found", id)
+	return pool, nil
 }
 
 type SanitizedConfig struct {

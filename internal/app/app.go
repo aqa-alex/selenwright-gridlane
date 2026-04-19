@@ -19,6 +19,7 @@ import (
 	"gridlane/internal/health"
 	"gridlane/internal/observe"
 	"gridlane/internal/proxy"
+	"gridlane/internal/sideroute"
 )
 
 const serviceName = "gridlane"
@@ -99,7 +100,9 @@ func NewRuntime(opts Options) (Runtime, error) {
 		Auth:             policy,
 		Health:           health.NewManager(cfg.BackendPools),
 		ProxyCredentials: backendCredentials,
-		Metrics:          observe.NewMetrics(),
+		// Metrics is populated by ReloadingHandler.Reload — the shared
+		// *observe.Metrics survives reload, so NewRuntime must not allocate
+		// its own instance that would be thrown away on the next line.
 	}, nil
 }
 
@@ -286,19 +289,11 @@ func NewHandler(opts Options, runtime Runtime) http.Handler {
 	mux.Handle("/session/", userScoped(runtime.Auth, unavailableOnError(webdriverProxy, proxyErr)))
 	mux.Handle("/playwright/", userScoped(runtime.Auth, unavailableOnError(webdriverProxy, proxyErr)))
 	mux.Handle("/host/", scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
-	for _, prefix := range []string{
-		"/vnc/",
-		"/devtools/",
-		"/video/",
-		"/logs/",
-		"/download/",
-		"/downloads/",
-		"/clipboard/",
-	} {
+	for _, prefix := range sideroute.Prefixes {
 		mux.Handle(prefix, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
 	}
-	mux.Handle("/history/settings", scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
-	mux.Handle("/history/settings/", scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
+	mux.Handle(sideroute.HistorySettingsExact, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
+	mux.Handle(sideroute.HistorySettingsPrefix, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
 	return metrics.Middleware(securityHeaders(mux))
 }
 
@@ -365,5 +360,9 @@ func getOnly(next http.HandlerFunc) http.HandlerFunc {
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		// Response headers are already committed — log so an operator can see
+		// broken pipe / write timeouts instead of silently truncated JSON.
+		slog.Warn("write JSON response failed", "err", err)
+	}
 }

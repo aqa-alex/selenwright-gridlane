@@ -74,7 +74,10 @@ func ParsePlaywrightPath(path string) (Request, error) {
 	if !strings.HasPrefix(path, prefix) {
 		return Request{}, fmt.Errorf("playwright path must start with %s", prefix)
 	}
-	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	// SplitN with n=3 stops after two separators: we only need browser and
+	// version, and long paths (e.g. trailing subprotocol segments) should not
+	// force a full slice allocation.
+	parts := strings.SplitN(strings.TrimPrefix(path, prefix), "/", 3)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
 		return Request{}, fmt.Errorf("playwright path must be /playwright/<browser>/<version>")
 	}

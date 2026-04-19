@@ -1,7 +1,6 @@
 # Running Gridlane with Selenwright
 
-This repo expects `/Users/Sasha/dev/selenwright` to be checked out next to
-`/Users/Sasha/dev/gridlane`.
+Expects the Selenwright checkout to sit next to the Gridlane one — e.g. both under `$HOME/dev/selen/` as `selenwright/` and `selenwright-gridlane/`. The exact parent directory is up to you; adjust the `cd` paths below to match your layout.
 
 ## Local Compose
 
@@ -9,14 +8,14 @@ Build or refresh the Selenwright local image first if its `dist/` binaries have
 changed:
 
 ```sh
-cd /Users/Sasha/dev/selenwright
+cd ../selenwright   # or $HOME/dev/selen/selenwright, etc.
 goreleaser build --snapshot --clean
 ```
 
 Start Gridlane with two Selenwright-compatible backend nodes:
 
 ```sh
-cd /Users/Sasha/dev/gridlane
+cd -   # back into the gridlane checkout
 GRIDLANE_ALICE_PASSWORD=wonderland GRIDLANE_ADMIN_TOKEN=root-token docker compose -f docker-compose.integration.yml up --build
 ```
 
