@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"gridlane/internal/auth"
 	"gridlane/internal/config"
 )
 
@@ -44,6 +45,7 @@ func (h *Handler) reverseProxyWithResponseSession(w http.ResponseWriter, r *http
 			req.Host = target.Host
 			req.Header.Del("Authorization")
 			h.applyBackendCredentials(req, backend.ID)
+			h.applyUpstreamIdentity(req, r.Context())
 		},
 		Transport: h.transport,
 		ModifyResponse: func(resp *http.Response) error {
@@ -76,8 +78,42 @@ func (h *Handler) newUpstreamRequest(ctx context.Context, original *http.Request
 	}
 	copyUpstreamRequestHeaders(req.Header, original.Header)
 	h.applyBackendCredentials(req, backend.ID)
+	h.applyUpstreamIdentity(req, original.Context())
 	req.Host = target.Host
 	return req, nil
+}
+
+// applyUpstreamIdentity stamps the resolved identity on the upstream request.
+// Headers are scrubbed first so a stale value from header-copying (e.g. the
+// original request somehow carried one despite the incoming spoof guard)
+// cannot leak through. When the feature is disabled this is a no-op.
+func (h *Handler) applyUpstreamIdentity(req *http.Request, ctx context.Context) {
+	for _, header := range h.upstreamIdentity.StripHeaders() {
+		req.Header.Del(header)
+	}
+	if !h.upstreamIdentity.Enabled() {
+		return
+	}
+	identity, ok := auth.IdentityFromContext(ctx)
+	if !ok || !identity.Allowed {
+		// Authorization middleware should have rejected the request before
+		// we ever got here; if it slipped through, emit no identity — failing
+		// closed is safer than forwarding an ambiguous subject.
+		return
+	}
+	subject := identity.Subject
+	if subject == "" && identity.Guest {
+		subject = "guest"
+	}
+	if subject != "" {
+		req.Header.Set(h.upstreamIdentity.UserHeader, subject)
+	}
+	if identity.Admin && h.upstreamIdentity.AdminHeader != "" {
+		req.Header.Set(h.upstreamIdentity.AdminHeader, "true")
+	}
+	if h.upstreamIdentity.RouterSecret != "" {
+		req.Header.Set(headerSelenwrightRouterSecret, h.upstreamIdentity.RouterSecret)
+	}
 }
 
 // classifyUpstreamStatus maps an HTTP status returned by the upstream to a

@@ -196,6 +196,106 @@ type backendNode struct {
 	Protocols []config.Protocol
 }
 
+func TestUpstreamIdentityPropagatesAndSpoofIsBlocked(t *testing.T) {
+	backend := newFakeSelenwright(t, "sw-identity")
+	t.Cleanup(func() { backend.Close() })
+
+	cfg := testRouterConfig(backendNode{
+		ID:        "sw-identity",
+		Endpoint:  backend.URL(),
+		Region:    "eu",
+		Weight:    1,
+		Protocols: []config.Protocol{config.ProtocolWebDriver},
+	})
+	cfg.UpstreamIdentity = &config.UpstreamIdentity{
+		UserHeader:  "X-Forwarded-User",
+		AdminHeader: "X-Admin",
+		SecretRef:   "env:GRIDLANE_ROUTER_SECRET",
+	}
+	t.Setenv("GRIDLANE_ROUTER_SECRET", "shared-between-router-and-selenwright")
+	router := newRouter(t, cfg)
+	t.Cleanup(func() { router.Close() })
+
+	// 1. Authenticated alice — upstream must see X-Forwarded-User=alice + router secret.
+	aliceSession := createWebDriverSession(t, router.URL, "eu")
+	aliceRecord := findRecord(t, backend, "POST", "/wd/hub/session")
+	if aliceRecord.ForwardedUser != "alice" {
+		t.Fatalf("alice create session: upstream X-Forwarded-User = %q, want alice", aliceRecord.ForwardedUser)
+	}
+	if aliceRecord.Admin != "" {
+		t.Fatalf("alice create session: upstream X-Admin = %q, want empty", aliceRecord.Admin)
+	}
+	if aliceRecord.RouterSecret != "shared-between-router-and-selenwright" {
+		t.Fatalf("alice create session: upstream router secret = %q, want shared-between-router-and-selenwright", aliceRecord.RouterSecret)
+	}
+
+	// 2. Side endpoint with spoofed identity headers — gridlane must overwrite.
+	req, err := http.NewRequest(http.MethodGet, router.URL+"/vnc/"+aliceSession, nil)
+	if err != nil {
+		t.Fatalf("new spoof request: %v", err)
+	}
+	req.SetBasicAuth("alice", "wonderland")
+	req.Header.Set("X-Forwarded-User", "attacker")
+	req.Header.Set("X-Admin", "true")
+	req.Header.Set("X-Selenwright-Router-Secret", "leaked")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("spoof request: %v", err)
+	}
+	_ = resp.Body.Close()
+	spoofRecord := lastRecordWithPrefix(t, backend, "GET /vnc/")
+	if spoofRecord.ForwardedUser != "alice" {
+		t.Fatalf("spoof overwrite: upstream X-Forwarded-User = %q, want alice", spoofRecord.ForwardedUser)
+	}
+	if spoofRecord.Admin != "" {
+		t.Fatalf("spoof overwrite: upstream X-Admin = %q, want empty (non-admin identity)", spoofRecord.Admin)
+	}
+	if spoofRecord.RouterSecret != "shared-between-router-and-selenwright" {
+		t.Fatalf("spoof overwrite: router secret = %q, want the configured one", spoofRecord.RouterSecret)
+	}
+
+	// 3. Unauthenticated guest on a user-scoped path — upstream must see "guest".
+	guestReq, err := http.NewRequest(http.MethodPost, router.URL+"/wd/hub/session", strings.NewReader(`{"capabilities":{"alwaysMatch":{"browserName":"chrome","browserVersion":"stable","platformName":"linux","gridlane:region":"eu"}}}`))
+	if err != nil {
+		t.Fatalf("new guest request: %v", err)
+	}
+	guestReq.Header.Set("Content-Type", "application/json")
+	guestResp, err := http.DefaultClient.Do(guestReq)
+	if err != nil {
+		t.Fatalf("guest request: %v", err)
+	}
+	_ = guestResp.Body.Close()
+	guestRecord := findRecord(t, backend, "POST", "/wd/hub/session")
+	// findRecord returns the most recent matching record
+	if guestRecord.ForwardedUser != "guest" {
+		t.Fatalf("guest request: upstream X-Forwarded-User = %q, want guest", guestRecord.ForwardedUser)
+	}
+}
+
+func findRecord(t *testing.T, backend *fakeSelenwright, method string, path string) requestRecord {
+	t.Helper()
+	records := backend.Records()
+	for i := len(records) - 1; i >= 0; i-- {
+		if records[i].Method == method && records[i].URI == path {
+			return records[i]
+		}
+	}
+	t.Fatalf("no %s %s in backend records; got: %+v", method, path, records)
+	return requestRecord{}
+}
+
+func lastRecordWithPrefix(t *testing.T, backend *fakeSelenwright, prefix string) requestRecord {
+	t.Helper()
+	records := backend.Records()
+	for i := len(records) - 1; i >= 0; i-- {
+		if strings.HasPrefix(records[i].Method+" "+records[i].URI, prefix) {
+			return records[i]
+		}
+	}
+	t.Fatalf("no record with prefix %q; got: %+v", prefix, records)
+	return requestRecord{}
+}
+
 func testRouterConfig(nodes ...backendNode) config.Config {
 	pools := make([]config.BackendPool, 0, len(nodes))
 	for _, node := range nodes {
@@ -555,6 +655,9 @@ type requestRecord struct {
 	Authorization     string
 	ExternalSessionID string
 	Subprotocol       string
+	ForwardedUser     string
+	Admin             string
+	RouterSecret      string
 }
 
 func newFakeSelenwright(t *testing.T, id string) *fakeSelenwright {
@@ -609,6 +712,9 @@ func (b *fakeSelenwright) record(r *http.Request) {
 		Authorization:     r.Header.Get("Authorization"),
 		ExternalSessionID: r.Header.Get("X-Selenwright-External-Session-ID"),
 		Subprotocol:       r.Header.Get("Sec-WebSocket-Protocol"),
+		ForwardedUser:     r.Header.Get("X-Forwarded-User"),
+		Admin:             r.Header.Get("X-Admin"),
+		RouterSecret:      r.Header.Get("X-Selenwright-Router-Secret"),
 	})
 }
 

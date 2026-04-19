@@ -19,6 +19,7 @@ type Runtime struct {
 	Auth             *auth.Policy
 	Health           *health.Manager
 	ProxyCredentials proxy.CredentialStore
+	UpstreamIdentity proxy.UpstreamIdentity
 	Metrics          *observe.Metrics
 }
 
@@ -43,10 +44,33 @@ func NewRuntime(opts Options) (Runtime, error) {
 	if err != nil {
 		return Runtime{}, fmt.Errorf("build backend credential store: %w", err)
 	}
+	upstreamIdentity, err := resolveUpstreamIdentity(cfg.UpstreamIdentity, auth.EnvFileResolver{})
+	if err != nil {
+		return Runtime{}, fmt.Errorf("resolve upstream_identity: %w", err)
+	}
 	return Runtime{
 		Catalog:          cat,
 		Auth:             policy,
 		Health:           health.NewManager(cfg.BackendPools),
 		ProxyCredentials: backendCredentials,
+		UpstreamIdentity: upstreamIdentity,
 	}, nil
+}
+
+func resolveUpstreamIdentity(cfg *routerconfig.UpstreamIdentity, resolver auth.SecretResolver) (proxy.UpstreamIdentity, error) {
+	if cfg == nil {
+		return proxy.UpstreamIdentity{}, nil
+	}
+	resolved := proxy.UpstreamIdentity{
+		UserHeader:  cfg.UserHeader,
+		AdminHeader: cfg.AdminHeader,
+	}
+	if cfg.SecretRef != "" {
+		secret, err := resolver.Resolve(cfg.SecretRef)
+		if err != nil {
+			return proxy.UpstreamIdentity{}, fmt.Errorf("resolve router secret: %w", err)
+		}
+		resolved.RouterSecret = secret
+	}
+	return resolved, nil
 }

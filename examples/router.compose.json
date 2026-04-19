@@ -65,5 +65,10 @@
   ],
   "admin": {
     "token_ref": "env:GRIDLANE_ADMIN_TOKEN"
+  },
+  "upstream_identity": {
+    "user_header": "X-Forwarded-User",
+    "admin_header": "X-Admin",
+    "secret_ref": "env:GRIDLANE_ROUTER_SECRET"
   }
 }

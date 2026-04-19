@@ -24,12 +24,31 @@ const (
 
 // Config is the strict router.json v1 shape.
 type Config struct {
-	Version      int           `json:"version"`
-	Users        []User        `json:"users,omitempty"`
-	Guest        *Guest        `json:"guest,omitempty"`
-	Catalog      Catalog       `json:"catalog"`
-	BackendPools []BackendPool `json:"backend_pools"`
-	Admin        Admin         `json:"admin,omitempty"`
+	Version          int               `json:"version"`
+	Users            []User            `json:"users,omitempty"`
+	Guest            *Guest            `json:"guest,omitempty"`
+	Catalog          Catalog           `json:"catalog"`
+	BackendPools     []BackendPool     `json:"backend_pools"`
+	Admin            Admin             `json:"admin,omitempty"`
+	UpstreamIdentity *UpstreamIdentity `json:"upstream_identity,omitempty"`
+}
+
+// UpstreamIdentity configures how gridlane propagates the resolved client
+// identity to upstream selenwright instances using the trusted-proxy pattern.
+// When nil (or UserHeader empty) gridlane keeps the legacy behavior and sends
+// no identity headers — this is the documented opt-in upgrade path.
+type UpstreamIdentity struct {
+	// UserHeader carries the identity subject (e.g. "X-Forwarded-User").
+	// Empty disables the whole feature for obvious reasons.
+	UserHeader string `json:"user_header"`
+	// AdminHeader (optional) is set to "true" when the caller passes gridlane's
+	// admin scope. Empty means don't emit a dedicated admin flag.
+	AdminHeader string `json:"admin_header,omitempty"`
+	// SecretRef resolves a shared router secret via env:/file:. When present
+	// gridlane stamps X-Selenwright-Router-Secret on every upstream request so
+	// selenwright's SourceTrust gate can reject direct clients that try to
+	// spoof X-Forwarded-User without going through the router.
+	SecretRef string `json:"secret_ref,omitempty"`
 }
 
 type User struct {
@@ -132,6 +151,23 @@ func (cfg Config) Validate() error {
 	}
 	if cfg.Admin.TokenRef != "" {
 		if err := ValidateSecretRef("admin.token_ref", cfg.Admin.TokenRef); err != nil {
+			return err
+		}
+	}
+	if cfg.UpstreamIdentity != nil {
+		if err := validateUpstreamIdentity(cfg.UpstreamIdentity); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateUpstreamIdentity(ui *UpstreamIdentity) error {
+	if ui.UserHeader == "" {
+		return fmt.Errorf("upstream_identity.user_header is required when upstream_identity is set")
+	}
+	if ui.SecretRef != "" {
+		if err := ValidateSecretRef("upstream_identity.secret_ref", ui.SecretRef); err != nil {
 			return err
 		}
 	}

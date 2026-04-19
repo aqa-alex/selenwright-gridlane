@@ -40,6 +40,12 @@ const (
 	// itself does not emit this header — it is a router↔client convention.
 	headerSelenwrightSessionID = "X-Selenwright-Session-ID"
 
+	// headerSelenwrightRouterSecret carries the shared secret between gridlane
+	// and selenwright's SourceTrust gate. Without it selenwright rejects any
+	// trusted-proxy identity header — so a direct client cannot bypass gridlane
+	// by stamping X-Forwarded-User themselves.
+	headerSelenwrightRouterSecret = "X-Selenwright-Router-Secret"
+
 	playwrightExternalSessionPrefix = "pw_"
 )
 
@@ -58,6 +64,32 @@ type SecretResolver interface {
 	Resolve(ref string) (string, error)
 }
 
+// UpstreamIdentity is the resolved form of config.UpstreamIdentity: headers
+// are pre-chosen and the router secret has already been read out of env:/file:
+// so the hot path is an O(1) header set.
+type UpstreamIdentity struct {
+	UserHeader   string
+	AdminHeader  string
+	RouterSecret string
+}
+
+// Enabled reports whether identity propagation should run. Empty UserHeader
+// leaves gridlane in legacy mode — no identity is forwarded.
+func (u UpstreamIdentity) Enabled() bool { return u.UserHeader != "" }
+
+// StripHeaders lists the header names that must be scrubbed off incoming
+// client requests to stop clients from forging identity upstream.
+func (u UpstreamIdentity) StripHeaders() []string {
+	if !u.Enabled() {
+		return nil
+	}
+	headers := []string{u.UserHeader, headerSelenwrightRouterSecret}
+	if u.AdminHeader != "" {
+		headers = append(headers, u.AdminHeader)
+	}
+	return headers
+}
+
 type Options struct {
 	Config                config.Config
 	Health                Health
@@ -67,6 +99,7 @@ type Options struct {
 	Transport             http.RoundTripper
 	Seed                  uint64
 	Metrics               Metrics
+	UpstreamIdentity      UpstreamIdentity
 }
 
 type Handler struct {
@@ -79,6 +112,7 @@ type Handler struct {
 	tokenToBackend        map[string]config.BackendPool
 	pools                 []config.BackendPool
 	metrics               Metrics
+	upstreamIdentity      UpstreamIdentity
 }
 
 func NewHandler(opts Options) (*Handler, error) {
@@ -125,8 +159,13 @@ func NewHandler(opts Options) (*Handler, error) {
 		tokenToBackend:        tokenToBackend,
 		pools:                 append([]config.BackendPool(nil), opts.Config.BackendPools...),
 		metrics:               opts.Metrics,
+		upstreamIdentity:      opts.UpstreamIdentity,
 	}, nil
 }
+
+// UpstreamIdentity returns the configured identity-propagation settings so
+// mux-level middleware can share the strip list.
+func (h *Handler) UpstreamIdentityConfig() UpstreamIdentity { return h.upstreamIdentity }
 
 func defaultTransport(proxyTimeout time.Duration) http.RoundTripper {
 	responseHeaderTimeout := min(proxyTimeout, 30*time.Second)

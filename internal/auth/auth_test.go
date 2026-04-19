@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -181,6 +182,21 @@ func TestValidateSecretRefRejectsUnclean(t *testing.T) {
 func TestValidateSecretRefAcceptsAbsoluteCleanPath(t *testing.T) {
 	if err := config.ValidateSecretRef("admin.token_ref", "file:/run/secrets/admin_token"); err != nil {
 		t.Fatalf("ValidateSecretRef(abs clean) error = %v, want nil", err)
+	}
+}
+
+func TestIdentityContextRoundTrip(t *testing.T) {
+	identity := Identity{Allowed: true, Scope: ScopeUser, Subject: "alice"}
+	ctx := WithIdentity(context.Background(), identity)
+	got, ok := IdentityFromContext(ctx)
+	if !ok {
+		t.Fatal("IdentityFromContext ok = false, want true")
+	}
+	if got != identity {
+		t.Fatalf("IdentityFromContext = %+v, want %+v", got, identity)
+	}
+	if _, ok := IdentityFromContext(context.Background()); ok {
+		t.Fatal("IdentityFromContext(bare ctx) ok = true, want false")
 	}
 }
 

@@ -25,6 +25,7 @@ func NewHandler(opts Options, runtime Runtime) http.Handler {
 		SessionAttemptTimeout: opts.SessionAttemptTimeout,
 		ProxyTimeout:          opts.ProxyTimeout,
 		Metrics:               metrics,
+		UpstreamIdentity:      runtime.UpstreamIdentity,
 	})
 	mux.HandleFunc("/ping", getOnly(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{
@@ -36,22 +37,23 @@ func NewHandler(opts Options, runtime Runtime) http.Handler {
 		writeJSON(w, http.StatusOK, runtime.Health.PublicSnapshot())
 	}))
 	mux.HandleFunc("/config", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		if !authorize(w, r, runtime.Auth, auth.ScopeAdmin) {
+		if _, ok := authorize(w, r, runtime.Auth, auth.ScopeAdmin); !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, runtime.Catalog.SanitizedConfig(opts.ConfigPath))
 	}))
 	mux.HandleFunc("/quota", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		if !authorize(w, r, runtime.Auth, auth.ScopeUser) {
+		if _, ok := authorize(w, r, runtime.Auth, auth.ScopeUser); !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, runtime.Catalog.Quota())
 	}))
 	mux.HandleFunc("/metrics", getOnly(func(w http.ResponseWriter, r *http.Request) {
-		if !authorize(w, r, runtime.Auth, auth.ScopeAdmin) {
+		authed, ok := authorize(w, r, runtime.Auth, auth.ScopeAdmin)
+		if !ok {
 			return
 		}
-		metrics.Handler(runtime.Health).ServeHTTP(w, r)
+		metrics.Handler(runtime.Health).ServeHTTP(w, authed)
 	}))
 	mux.Handle("/wd/hub/session", userScoped(runtime.Auth, unavailableOnError(webdriverProxy, proxyErr)))
 	mux.Handle("/wd/hub/session/", userScoped(runtime.Auth, unavailableOnError(webdriverProxy, proxyErr)))
@@ -67,14 +69,17 @@ func NewHandler(opts Options, runtime Runtime) http.Handler {
 	}
 	mux.Handle(sideroute.HistorySettingsExact, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
 	mux.Handle(sideroute.HistorySettingsPrefix, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
-	return buildMiddleware(metrics, mux)
+	return buildMiddleware(metrics, runtime.UpstreamIdentity.StripHeaders(), mux)
 }
 
 // buildMiddleware applies the gridlane-wide middleware chain (metrics
-// observation, security headers) to the final handler. Ordered outer-to-
-// inner; additions go here so tests can reason about a single place.
-func buildMiddleware(metrics *observe.Metrics, h http.Handler) http.Handler {
+// observation, security headers, upstream-identity header strip) to the final
+// handler. Ordered outer-to-inner; additions go here so tests can reason
+// about a single place. The strip runs outermost so spoofed X-Forwarded-User
+// values are erased before anything else sees them.
+func buildMiddleware(metrics *observe.Metrics, spoofHeaders []string, h http.Handler) http.Handler {
 	chain := []func(http.Handler) http.Handler{
+		stripUpstreamIdentityHeaders(spoofHeaders),
 		metrics.Middleware,
 		securityHeaders,
 	}

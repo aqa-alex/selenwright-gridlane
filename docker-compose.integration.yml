@@ -10,6 +10,7 @@ services:
     environment:
       GRIDLANE_ALICE_PASSWORD: ${GRIDLANE_ALICE_PASSWORD:-wonderland}
       GRIDLANE_ADMIN_TOKEN: ${GRIDLANE_ADMIN_TOKEN:-root-token}
+      GRIDLANE_ROUTER_SECRET: ${GRIDLANE_ROUTER_SECRET:-dev-router-secret}
     volumes:
       - ./examples/router.compose.json:/etc/gridlane/router.json:ro
     command:
@@ -37,6 +38,7 @@ services:
     environment:
       OVERRIDE_VIDEO_OUTPUT_DIR: /Users/Sasha/dev/selenwright/video
       DOCKER_API_VERSION: "1.45"
+      GRIDLANE_ROUTER_SECRET: ${GRIDLANE_ROUTER_SECRET:-dev-router-secret}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../selenwright/config:/etc/selenwright:ro
@@ -63,6 +65,14 @@ services:
       - /opt/selenwright/state/artifact-history-a.json
       - -container-network
       - gridlane-integration
+      - -auth-mode
+      - trusted-proxy
+      - -user-header
+      - X-Forwarded-User
+      - -admin-header
+      - X-Admin
+      - -router-secret-ref
+      - env:GRIDLANE_ROUTER_SECRET
     networks:
       - gridlane-integration
 
@@ -74,6 +84,7 @@ services:
     environment:
       OVERRIDE_VIDEO_OUTPUT_DIR: /Users/Sasha/dev/selenwright/video
       DOCKER_API_VERSION: "1.45"
+      GRIDLANE_ROUTER_SECRET: ${GRIDLANE_ROUTER_SECRET:-dev-router-secret}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ../selenwright/config:/etc/selenwright:ro
@@ -100,6 +111,14 @@ services:
       - /opt/selenwright/state/artifact-history-b.json
       - -container-network
       - gridlane-integration
+      - -auth-mode
+      - trusted-proxy
+      - -user-header
+      - X-Forwarded-User
+      - -admin-header
+      - X-Admin
+      - -router-secret-ref
+      - env:GRIDLANE_ROUTER_SECRET
     networks:
       - gridlane-integration
 

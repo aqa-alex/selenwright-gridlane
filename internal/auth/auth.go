@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
@@ -167,6 +168,23 @@ type Identity struct {
 	Subject string
 	Guest   bool
 	Admin   bool
+}
+
+type identityCtxKey struct{}
+
+// WithIdentity attaches a resolved Identity to the request context so
+// downstream handlers (notably the proxy package) can propagate who the
+// client is without re-running the policy check.
+func WithIdentity(ctx context.Context, id Identity) context.Context {
+	return context.WithValue(ctx, identityCtxKey{}, id)
+}
+
+// IdentityFromContext returns the Identity attached by WithIdentity, and
+// whether one was present. Handlers that run after scoped/userScoped can
+// rely on ok=true; anywhere else it must be treated as optional.
+func IdentityFromContext(ctx context.Context) (Identity, bool) {
+	id, ok := ctx.Value(identityCtxKey{}).(Identity)
+	return id, ok
 }
 
 func adminTokenFromRequest(r *http.Request) string {
