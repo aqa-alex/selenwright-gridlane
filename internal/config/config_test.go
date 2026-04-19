@@ -6,6 +6,7 @@ import (
 )
 
 func TestLoadValidConfig(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(strings.NewReader(validConfigJSON()))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -25,6 +26,7 @@ func TestLoadValidConfig(t *testing.T) {
 }
 
 func TestLoadRejectsUnknownField(t *testing.T) {
+	t.Parallel()
 	_, err := Load(strings.NewReader(`{
 		"version": 1,
 		"unexpected": true,
@@ -41,6 +43,7 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 }
 
 func TestLoadRejectsMultipleJSONObjects(t *testing.T) {
+	t.Parallel()
 	_, err := Load(strings.NewReader(validConfigJSON() + `{}`))
 	if err == nil {
 		t.Fatal("Load() error = nil, want single object error")
@@ -51,6 +54,7 @@ func TestLoadRejectsMultipleJSONObjects(t *testing.T) {
 }
 
 func TestValidateRejectsUnsupportedProtocol(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(strings.NewReader(validConfigJSON()))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -67,6 +71,7 @@ func TestValidateRejectsUnsupportedProtocol(t *testing.T) {
 }
 
 func TestValidateRejectsPlaintextSecretRef(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(strings.NewReader(validConfigJSON()))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)

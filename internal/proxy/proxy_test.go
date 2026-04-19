@@ -20,6 +20,7 @@ import (
 )
 
 func TestCreateSessionRewritesJSONWireSessionIDAndLocation(t *testing.T) {
+	t.Parallel()
 	var gotPath string
 	var gotAuthorization string
 	var gotBody string
@@ -35,7 +36,7 @@ func TestCreateSessionRewritesJSONWireSessionIDAndLocation(t *testing.T) {
 		w.Header().Set("Location", backendURL(r)+"/wd/hub/session/upstream-jsonwire")
 		_, _ = w.Write([]byte(`{"sessionId":"upstream-jsonwire","status":0,"value":{"browserName":"chrome"}}`))
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 	req := httptest.NewRequest(http.MethodPost, "http://gridlane.test/wd/hub/session", strings.NewReader(`{
@@ -85,6 +86,7 @@ func TestCreateSessionRewritesJSONWireSessionIDAndLocation(t *testing.T) {
 }
 
 func TestCreateSessionRewritesW3CValueSessionID(t *testing.T) {
+	t.Parallel()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/session" {
 			t.Fatalf("upstream path = %q, want /session", r.URL.Path)
@@ -92,7 +94,7 @@ func TestCreateSessionRewritesW3CValueSessionID(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"value":{"sessionId":"upstream-w3c","capabilities":{"browserName":"chrome"}}}`))
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 	req := httptest.NewRequest(http.MethodPost, "http://gridlane.test/session", strings.NewReader(`{
@@ -123,12 +125,13 @@ func TestCreateSessionRewritesW3CValueSessionID(t *testing.T) {
 }
 
 func TestCreateSessionDoesNotTrustForwardedProtoForLocation(t *testing.T) {
+	t.Parallel()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Location", backendURL(r)+"/wd/hub/session/upstream-location")
 		_, _ = w.Write([]byte(`{"value":{"sessionId":"upstream-location","capabilities":{"browserName":"chrome"}}}`))
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 	req := httptest.NewRequest(http.MethodPost, "http://gridlane.test/wd/hub/session", strings.NewReader(`{
@@ -148,11 +151,12 @@ func TestCreateSessionDoesNotTrustForwardedProtoForLocation(t *testing.T) {
 }
 
 func TestCreateSessionRejectsBadJSONBeforeCallingBackend(t *testing.T) {
+	t.Parallel()
 	called := false
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 	req := httptest.NewRequest(http.MethodPost, "http://gridlane.test/wd/hub/session", strings.NewReader(`{`))
@@ -169,11 +173,12 @@ func TestCreateSessionRejectsBadJSONBeforeCallingBackend(t *testing.T) {
 }
 
 func TestCreateSessionRejectsUnsupportedBrowser(t *testing.T) {
+	t.Parallel()
 	called := false
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 	req := httptest.NewRequest(http.MethodPost, "http://gridlane.test/wd/hub/session", strings.NewReader(`{
@@ -192,6 +197,7 @@ func TestCreateSessionRejectsUnsupportedBrowser(t *testing.T) {
 }
 
 func TestCreateSessionReportsBackendFailure(t *testing.T) {
+	t.Parallel()
 	health := &trackingHealth{available: map[string]bool{"sw-a": true}}
 	metrics := &trackingMetrics{}
 	handler := newTestHandler(t, testConfig("http://127.0.0.1:4444"), Options{
@@ -218,6 +224,7 @@ func TestCreateSessionReportsBackendFailure(t *testing.T) {
 }
 
 func TestProxyWebDriverSessionStripsRouteAndRequestSessionID(t *testing.T) {
+	t.Parallel()
 	publicSessionID := publicSessionIDFor(t, "sw-a", "upstream-followup")
 	var gotPath string
 	var gotBody string
@@ -232,7 +239,7 @@ func TestProxyWebDriverSessionStripsRouteAndRequestSessionID(t *testing.T) {
 		gotBody = string(body)
 		_, _ = w.Write([]byte("ok"))
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{
 		Credentials: CredentialStore{
@@ -264,13 +271,14 @@ func TestProxyWebDriverSessionStripsRouteAndRequestSessionID(t *testing.T) {
 }
 
 func TestProxySideEndpointStripsRoute(t *testing.T) {
+	t.Parallel()
 	publicSessionID := publicSessionIDFor(t, "sw-a", "upstream-side")
 	var gotPaths []string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.URL.Path)
 		_, _ = w.Write([]byte("ok"))
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 
@@ -307,6 +315,7 @@ func TestProxySideEndpointStripsRoute(t *testing.T) {
 }
 
 func TestProxyPlaywrightWebSocketUpgradePreservesHeadersQuerySubprotocolAndExternalID(t *testing.T) {
+	t.Parallel()
 	type upgradeRequest struct {
 		path              string
 		rawQuery          string
@@ -350,11 +359,11 @@ func TestProxyPlaywrightWebSocketUpgradePreservesHeadersQuerySubprotocolAndExter
 		}
 		_, _ = io.Copy(io.Discard, conn)
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 	router := httptest.NewServer(handler)
-	defer router.Close()
+	t.Cleanup(func() { router.Close() })
 
 	conn, err := net.Dial("tcp", strings.TrimPrefix(router.URL, "http://"))
 	if err != nil {
@@ -426,13 +435,14 @@ func TestProxyPlaywrightWebSocketUpgradePreservesHeadersQuerySubprotocolAndExter
 }
 
 func TestProxyPlaywrightSideEndpointKeepsPublicSessionID(t *testing.T) {
+	t.Parallel()
 	publicSessionID := publicPlaywrightSessionIDFor(t, "sw-a", "external")
 	var gotPaths []string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPaths = append(gotPaths, r.URL.Path)
 		_, _ = w.Write([]byte("ok"))
 	}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 
@@ -469,8 +479,9 @@ func TestProxyPlaywrightSideEndpointKeepsPublicSessionID(t *testing.T) {
 }
 
 func TestHostInfoUsesBackendFromRouteToken(t *testing.T) {
+	t.Parallel()
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	handler := newTestHandler(t, testConfig(backend.URL), Options{})
 	publicSessionID := publicSessionIDFor(t, "sw-a", "upstream-host")
@@ -501,6 +512,7 @@ func TestHostInfoUsesBackendFromRouteToken(t *testing.T) {
 }
 
 func TestDefaultTransportHasProductionLimits(t *testing.T) {
+	t.Parallel()
 	transport, ok := defaultTransport(5 * time.Minute).(*http.Transport)
 	if !ok {
 		t.Fatalf("defaultTransport() = %T, want *http.Transport", defaultTransport(5*time.Minute))
@@ -635,6 +647,7 @@ func (h *trackingHealth) ReportFailure(backendID string) {
 }
 
 func TestClassifyUpstreamStatus(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		code      int
 		outcome   string
@@ -670,6 +683,7 @@ func TestClassifyUpstreamStatus(t *testing.T) {
 }
 
 func TestCreateSessionTreats429AsFailure(t *testing.T) {
+	t.Parallel()
 	health := &trackingHealth{available: map[string]bool{"sw-a": true}}
 	metrics := &trackingMetrics{}
 	handler := newTestHandler(t, testConfig("http://127.0.0.1:4444"), Options{
@@ -705,6 +719,7 @@ func TestCreateSessionTreats429AsFailure(t *testing.T) {
 }
 
 func TestCreateSessionTreats404AsClientError(t *testing.T) {
+	t.Parallel()
 	health := &trackingHealth{available: map[string]bool{"sw-a": true}}
 	metrics := &trackingMetrics{}
 	handler := newTestHandler(t, testConfig("http://127.0.0.1:4444"), Options{

@@ -26,9 +26,9 @@ import (
 
 func TestMixedProtocolIntegrationAcrossTwoFakeSelenwrightBackends(t *testing.T) {
 	webdriverBackend := newFakeSelenwright(t, "sw-webdriver")
-	defer webdriverBackend.Close()
+	t.Cleanup(func() { webdriverBackend.Close() })
 	playwrightBackend := newFakeSelenwright(t, "sw-playwright")
-	defer playwrightBackend.Close()
+	t.Cleanup(func() { playwrightBackend.Close() })
 
 	cfg := testRouterConfig(
 		backendNode{
@@ -47,7 +47,7 @@ func TestMixedProtocolIntegrationAcrossTwoFakeSelenwrightBackends(t *testing.T) 
 		},
 	)
 	router := newRouter(t, cfg)
-	defer router.Close()
+	t.Cleanup(func() { router.Close() })
 
 	webdriverSessionID := createWebDriverSession(t, router.URL, "eu")
 	webdriverParts := decodeSessionID(t, webdriverSessionID)
@@ -97,7 +97,7 @@ func TestMixedProtocolIntegrationAcrossTwoFakeSelenwrightBackends(t *testing.T) 
 
 func TestSessionIDsRouteAcrossRouterInstances(t *testing.T) {
 	backend := newFakeSelenwright(t, "sw-shared")
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	cfg := testRouterConfig(backendNode{
 		ID:        "sw-shared",
@@ -107,9 +107,9 @@ func TestSessionIDsRouteAcrossRouterInstances(t *testing.T) {
 		Protocols: []config.Protocol{config.ProtocolWebDriver, config.ProtocolPlaywright},
 	})
 	routerA := newRouter(t, cfg)
-	defer routerA.Close()
+	t.Cleanup(func() { routerA.Close() })
 	routerB := newRouter(t, cfg)
-	defer routerB.Close()
+	t.Cleanup(func() { routerB.Close() })
 
 	webdriverSessionID := createWebDriverSession(t, routerA.URL, "eu")
 	webdriverParts := decodeSessionID(t, webdriverSessionID)
@@ -123,11 +123,11 @@ func TestSessionIDsRouteAcrossRouterInstances(t *testing.T) {
 
 func TestConfigReloadIsAtomicAndDropsRemovedBackends(t *testing.T) {
 	removedBackend := newFakeSelenwright(t, "sw-removed")
-	defer removedBackend.Close()
+	t.Cleanup(func() { removedBackend.Close() })
 	oldBackend := newFakeSelenwright(t, "sw-old")
-	defer oldBackend.Close()
+	t.Cleanup(func() { oldBackend.Close() })
 	reloadedBackend := newFakeSelenwright(t, "sw-reloaded")
-	defer reloadedBackend.Close()
+	t.Cleanup(func() { reloadedBackend.Close() })
 
 	configPath := writeConfig(t, testRouterConfig(
 		backendNode{
@@ -147,7 +147,7 @@ func TestConfigReloadIsAtomicAndDropsRemovedBackends(t *testing.T) {
 	))
 	handler := newReloadingHandler(t, configPath)
 	router := httptest.NewServer(handler)
-	defer router.Close()
+	t.Cleanup(func() { router.Close() })
 
 	removedSessionID := createWebDriverSession(t, router.URL, "eu")
 	removedParts := decodeSessionID(t, removedSessionID)

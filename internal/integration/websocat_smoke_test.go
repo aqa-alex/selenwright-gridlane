@@ -18,7 +18,7 @@ func TestWebsocatSmoke(t *testing.T) {
 	}
 
 	backend := newFakeSelenwright(t, "sw-websocat")
-	defer backend.Close()
+	t.Cleanup(func() { backend.Close() })
 
 	router := newRouter(t, testRouterConfig(backendNode{
 		ID:        "sw-websocat",
@@ -27,7 +27,7 @@ func TestWebsocatSmoke(t *testing.T) {
 		Weight:    1,
 		Protocols: []config.Protocol{config.ProtocolPlaywright},
 	}))
-	defer router.Close()
+	t.Cleanup(func() { router.Close() })
 
 	wsURL := "ws" + strings.TrimPrefix(router.URL, "http") + "/playwright/chrome/stable?smoke=websocat"
 	cmd := exec.Command(

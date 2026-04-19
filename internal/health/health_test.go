@@ -9,6 +9,7 @@ import (
 )
 
 func TestManagerHealthCooldown(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
 	manager := NewManagerWithClock([]config.BackendPool{{
 		ID:        "sw-local",
@@ -45,6 +46,7 @@ func TestManagerHealthCooldown(t *testing.T) {
 }
 
 func TestManagerReportSuccessResetsFailuresBelowThreshold(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
 	manager := NewManagerWithClock([]config.BackendPool{{
 		ID:        "sw-local",
@@ -74,6 +76,7 @@ func TestManagerReportSuccessResetsFailuresBelowThreshold(t *testing.T) {
 }
 
 func TestManagerReportSuccessDoesNotBypassCooldown(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
 	manager := NewManagerWithClock([]config.BackendPool{{
 		ID:        "sw-local",
@@ -100,6 +103,7 @@ func TestManagerReportSuccessDoesNotBypassCooldown(t *testing.T) {
 }
 
 func TestManagerReportSuccessAfterCooldownResetsState(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
 	manager := NewManagerWithClock([]config.BackendPool{{
 		ID:        "sw-local",
@@ -130,6 +134,7 @@ func TestManagerReportSuccessAfterCooldownResetsState(t *testing.T) {
 }
 
 func TestManagerDisabledHealthDoesNotTrip(t *testing.T) {
+	t.Parallel()
 	manager := NewManagerWithClock([]config.BackendPool{{
 		ID:        "sw-local",
 		Endpoint:  "http://127.0.0.1:4444",
@@ -145,6 +150,7 @@ func TestManagerDisabledHealthDoesNotTrip(t *testing.T) {
 }
 
 func TestManagerSnapshotClearsExpiredCooldown(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
 	manager := NewManagerWithClock([]config.BackendPool{{
 		ID:        "sw-local",
@@ -174,6 +180,7 @@ func TestManagerSnapshotClearsExpiredCooldown(t *testing.T) {
 }
 
 func TestManagerConcurrentReports(t *testing.T) {
+	t.Parallel()
 	// Stresses Manager under -race: N goroutines hammer ReportFailure,
 	// ReportSuccess and Available at once. Passes means the mutex keeps the
 	// backend map and state counters coherent.
@@ -219,6 +226,7 @@ func TestManagerConcurrentReports(t *testing.T) {
 }
 
 func TestManagerDisabledHealthIgnoresReportSuccess(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 4, 11, 12, 0, 0, 0, time.UTC)
 	manager := NewManagerWithClock([]config.BackendPool{{
 		ID:        "sw-local",

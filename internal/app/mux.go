@@ -59,8 +59,11 @@ func NewHandler(opts Options, runtime Runtime) http.Handler {
 	mux.Handle("/session/", userScoped(runtime.Auth, unavailableOnError(webdriverProxy, proxyErr)))
 	mux.Handle("/playwright/", userScoped(runtime.Auth, unavailableOnError(webdriverProxy, proxyErr)))
 	mux.Handle("/host/", scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
+	// Each side prefix registration carries its matched prefix into the
+	// request context so proxy.proxySideEndpoint does not re-scan the prefix
+	// list on every call — see sideroute.PrefixMiddleware.
 	for _, prefix := range sideroute.Prefixes {
-		mux.Handle(prefix, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
+		mux.Handle(prefix, scoped(runtime.Auth, auth.ScopeSide, sideroute.PrefixMiddleware(prefix, unavailableOnError(webdriverProxy, proxyErr))))
 	}
 	mux.Handle(sideroute.HistorySettingsExact, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))
 	mux.Handle(sideroute.HistorySettingsPrefix, scoped(runtime.Auth, auth.ScopeSide, unavailableOnError(webdriverProxy, proxyErr)))

@@ -33,10 +33,18 @@ func (h *Handler) proxySideEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefix, rest, ok := splitSidePath(r.URL.Path)
-	if !ok {
-		http.Error(w, "invalid side endpoint path", http.StatusBadRequest)
-		return
+	prefix, ok := sideroute.PrefixFromContext(r.Context())
+	var rest string
+	if ok {
+		rest = strings.TrimPrefix(r.URL.Path, prefix)
+	} else {
+		// Fallback when the handler is invoked without the mux middleware
+		// (direct unit tests, or future callers that skip PrefixMiddleware).
+		prefix, rest, ok = splitSidePath(r.URL.Path)
+		if !ok {
+			http.Error(w, "invalid side endpoint path", http.StatusBadRequest)
+			return
+		}
 	}
 	if rest == "" {
 		backend, err := h.defaultBackend()

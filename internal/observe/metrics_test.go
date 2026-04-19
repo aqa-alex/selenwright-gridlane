@@ -7,6 +7,7 @@ import (
 )
 
 func TestRouteLabelRedactsSessionIDs(t *testing.T) {
+	t.Parallel()
 	tests := map[string]string{
 		"/wd/hub/session/r1_token_secret/url":        "/wd/hub/session/:session",
 		"/playwright/chrome/stable":                  "/playwright/:browser/:version",
@@ -23,6 +24,7 @@ func TestRouteLabelRedactsSessionIDs(t *testing.T) {
 }
 
 func TestMetricsPrometheusOutput(t *testing.T) {
+	t.Parallel()
 	metrics := NewMetrics()
 	metrics.RecordHTTPRequest("GET", "/logs/r1_secret", 200, 12*time.Millisecond)
 	metrics.RecordProxyRequest("playwright", "sw-a", "success", 20*time.Millisecond)

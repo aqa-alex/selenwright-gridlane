@@ -9,6 +9,7 @@ import (
 )
 
 func TestSanitizedConfigRedactsSecretRefs(t *testing.T) {
+	t.Parallel()
 	cat, err := New(sampleConfig())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -43,6 +44,7 @@ func TestSanitizedConfigRedactsSecretRefs(t *testing.T) {
 }
 
 func TestQuotaViewIncludesUsersAndGuest(t *testing.T) {
+	t.Parallel()
 	cat, err := New(sampleConfig())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

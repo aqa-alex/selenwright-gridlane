@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseWebDriverW3CAlwaysMatch(t *testing.T) {
+	t.Parallel()
 	requests, err := ParseWebDriverNewSession(strings.NewReader(`{
 		"capabilities": {
 			"alwaysMatch": {
@@ -43,6 +44,7 @@ func TestParseWebDriverW3CAlwaysMatch(t *testing.T) {
 }
 
 func TestParseWebDriverJSONWireDeviceNameFallback(t *testing.T) {
+	t.Parallel()
 	requests, err := ParseWebDriverNewSession(strings.NewReader(`{
 		"desiredCapabilities": {
 			"appium:deviceName": "iPhone 15",
@@ -72,6 +74,7 @@ func TestParseWebDriverJSONWireDeviceNameFallback(t *testing.T) {
 }
 
 func TestParseWebDriverW3CFirstMatchYieldsOrderedCandidates(t *testing.T) {
+	t.Parallel()
 	requests, err := ParseWebDriverNewSession(strings.NewReader(`{
 		"capabilities": {
 			"alwaysMatch": {"platformName": "linux"},
@@ -96,6 +99,7 @@ func TestParseWebDriverW3CFirstMatchYieldsOrderedCandidates(t *testing.T) {
 }
 
 func TestSelectorSelectFirstUsesCatalogFallback(t *testing.T) {
+	t.Parallel()
 	pools := []config.BackendPool{
 		{ID: "eu", Region: "eu", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},
 	}
@@ -118,6 +122,7 @@ func TestSelectorSelectFirstUsesCatalogFallback(t *testing.T) {
 }
 
 func TestParseWebDriverRejectsNonStringBrowserName(t *testing.T) {
+	t.Parallel()
 	_, err := ParseWebDriverNewSession(strings.NewReader(`{
 		"capabilities": {"alwaysMatch": {"browserName": true}}
 	}`))
@@ -127,6 +132,7 @@ func TestParseWebDriverRejectsNonStringBrowserName(t *testing.T) {
 }
 
 func TestSelectorSelectFirstReturnsErrorOnNoMatch(t *testing.T) {
+	t.Parallel()
 	pools := []config.BackendPool{
 		{ID: "eu", Region: "eu", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},
 	}
@@ -142,6 +148,7 @@ func TestSelectorSelectFirstReturnsErrorOnNoMatch(t *testing.T) {
 }
 
 func TestParsePlaywrightPath(t *testing.T) {
+	t.Parallel()
 	req, err := ParsePlaywrightPath("/playwright/chromium/1.56")
 	if err != nil {
 		t.Fatalf("ParsePlaywrightPath() error = %v", err)
@@ -158,6 +165,7 @@ func TestParsePlaywrightPath(t *testing.T) {
 }
 
 func TestSelectorRegionFallbackAndHealthFiltering(t *testing.T) {
+	t.Parallel()
 	pools := []config.BackendPool{
 		{ID: "us", Region: "us", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},
 		{ID: "eu", Region: "eu", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},
@@ -174,6 +182,7 @@ func TestSelectorRegionFallbackAndHealthFiltering(t *testing.T) {
 }
 
 func TestSelectorWeightedSelection(t *testing.T) {
+	t.Parallel()
 	pools := []config.BackendPool{
 		{ID: "zero", Region: "eu", Weight: 0, Protocols: []config.Protocol{config.ProtocolWebDriver}},
 		{ID: "winner", Region: "eu", Weight: 10, Protocols: []config.Protocol{config.ProtocolWebDriver}},
@@ -190,6 +199,7 @@ func TestSelectorWeightedSelection(t *testing.T) {
 }
 
 func TestCatalogSupportsVersionAndPlatformPrefix(t *testing.T) {
+	t.Parallel()
 	req := Request{
 		Protocol:    config.ProtocolWebDriver,
 		BrowserName: "chrome",
@@ -202,6 +212,7 @@ func TestCatalogSupportsVersionAndPlatformPrefix(t *testing.T) {
 }
 
 func TestCatalogPrefixMatchIsOneWay(t *testing.T) {
+	t.Parallel()
 	catalog := config.Catalog{Browsers: []config.Browser{{
 		Name:      "chrome",
 		Versions:  []string{"120"},
@@ -221,6 +232,7 @@ func TestCatalogPrefixMatchIsOneWay(t *testing.T) {
 }
 
 func TestCatalogPrefixMatchAcceptsNarrowerClient(t *testing.T) {
+	t.Parallel()
 	catalog := config.Catalog{Browsers: []config.Browser{{
 		Name:      "chrome",
 		Versions:  []string{"12"},
@@ -240,6 +252,7 @@ func TestCatalogPrefixMatchAcceptsNarrowerClient(t *testing.T) {
 }
 
 func TestSelectorRejectsUnsupportedBrowser(t *testing.T) {
+	t.Parallel()
 	selector := NewSelector(sampleCatalog(), []config.BackendPool{
 		{ID: "local", Region: "eu", Weight: 1, Protocols: []config.Protocol{config.ProtocolWebDriver}},
 	}, 1)
