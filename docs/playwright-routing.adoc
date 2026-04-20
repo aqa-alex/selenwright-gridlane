@@ -1,0 +1,78 @@
+== Playwright Routing
+
+Gridlane proxies Playwright WebSocket connections on the same listener as WebDriver. A Playwright client connects to the browser/version path the same way it would against a direct Selenwright:
+
+[source]
+----
+ws://<gridlane>:4444/playwright/<browser>/<version>
+----
+
+`<browser>` must be a `catalog.browsers[].name`; `<version>` must be present in that browser's `versions`. Neither value is free-form — both are validated against the loaded catalog before any upstream is contacted.
+
+=== Upgrade Flow
+
+On the incoming `GET /playwright/<browser>/<version>` with an `Upgrade: websocket` header:
+
+. Gridlane authenticates the caller (`user` scope — BasicAuth or guest if configured) and enforces the quota.
+. Gridlane selects a healthy backend pool from those advertising `"playwright"` in `protocols`, weighted and region-aware.
+. Gridlane **mints a fresh public session ID** — the upstream part is `pw_<32-hex>`, so the full public ID is `r1_<route-token>_pw_<32-hex>`.
+. Gridlane sends the upgrade to the chosen backend with `X-Selenwright-External-Session-ID: <public-id>` set on the upstream request.
+. On the `101 Switching Protocols` response Gridlane echoes `X-Selenwright-Session-ID: <public-id>` back to the client, then relays the WebSocket frames transparently.
+
+Selenwright uses the external-ID header as the session key in its own storage. Clients that do not read headers off the `101` response can still address side endpoints — the public ID is also the one they would see by inspecting the WebSocket URL if they needed to reconnect.
+
+NOTE: Gridlane picks the session ID (not Selenwright) and tells Selenwright what it is via `X-Selenwright-External-Session-ID` on the upgrade. This way the same ID works across Gridlane replicas and across WebDriver/Playwright uniformly, and side endpoints (`/vnc/<id>`, `/video/<id>`, `/logs/<id>`) resolve against whatever the client already has.
+
+=== Side Endpoints
+
+Once a Playwright session is up, the usual Selenwright side surfaces are accessible at their normal paths, using the **public** session ID. Some are HTTP, some are WebSocket — see <<HTTP API>> for the full matrix. Typical examples:
+
+[source]
+----
+# WebSocket — upgrade required
+/vnc/<public-id>                 # live VNC stream
+/devtools/<public-id>/page       # Chrome DevTools Protocol
+/logs/<public-id>                # live session-log stream
+
+# HTTP
+/video/<public-id>.mp4           # recorded session video
+/download/<public-id>/<file>     # per-session downloaded file
+/downloads/<public-id>           # downloads index
+/clipboard/<public-id>           # clipboard read/write
+----
+
+Gridlane forwards these to the pool selected by the public ID's `<route-token>`, keeping the public ID on the upstream path (Selenwright stored the session under the public ID, so `/vnc/r1_…/` lands on the right container).
+
+These routes are `side` scope — BasicAuth required, no guest fallback.
+
+=== Query Parameters
+
+A small set of capabilities is accepted as query parameters on the upgrade URL and passed through to Selenwright verbatim:
+
+* `enableVNC=true` — start VNC for the session.
+* `name=<label>` — human-readable label shown in UI.
+* `screenResolution=1280x1024` — container screen resolution.
+
+[source]
+----
+ws://gridlane:4444/playwright/chromium/1.56.1?enableVNC=true&name=myTest
+----
+
+=== Version Matching
+
+Gridlane performs no semver matching — `<version>` must exactly match one of `catalog.browsers[].versions[]`. Keep the catalog version, the Selenwright image tag, and the client's connection URL aligned. Playwright client/server major.minor mismatches are rejected by the Playwright protocol itself, not by Gridlane.
+
+=== Errors
+
+[cols="1,4"]
+|===
+| Status | When
+
+| `400` | `<browser>` / `<version>` not in the loaded catalog
+| `401` | BasicAuth missing or wrong, no guest fallback
+| `404` | Path not `/playwright/<browser>/<version>` (missing segments)
+| `429` | Caller's quota reached
+| `503` | No healthy backend pool with `"playwright"` in `protocols`
+|===
+
+WebSocket upgrade failures are returned as regular HTTP responses before the `101`. Failures that happen after the upgrade (upstream disconnect, idle timeout) are surfaced as WebSocket close frames.

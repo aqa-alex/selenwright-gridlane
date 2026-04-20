@@ -1,0 +1,59 @@
+== FAQ
+
+=== Why does `/wd/hub/session` return 401 even though my credentials work on `/quota`?
+
+Almost always a typo in the `Authorization` header. WebDriver session create and Playwright upgrade are `user` scope — BasicAuth matching a `users[]` entry, or anonymous guest access if `guest` is configured. If the header is malformed, Gridlane falls through to the guest check; if `guest` is not configured the final response is `401`.
+
+`/quota` rejects the same way. If you are getting a 200 on `/quota` with the same credentials, recheck the header you are actually sending on the WebDriver request — tooling sometimes rewrites headers in unexpected ways.
+
+=== Why does VNC / video / logs 401 when WebDriver works?
+
+Side endpoints (`/vnc/`, `/video/`, `/logs/`, `/devtools/`, `/download/`, `/downloads/`, `/clipboard/`, `/history/settings`) are `side` scope — they require BasicAuth matching a `users[]` entry and **do not** fall back to guest. Sessions a guest created cannot be observed through VNC unless the observer authenticates as a named user.
+
+See <<Authentication>> for the scope ladder.
+
+=== Can I run more than one Gridlane replica in front of the same backend pool?
+
+Yes — Gridlane keeps no per-session state. Public session IDs are `r1_<route-token>_<upstream-id>`, and the `<route-token>` is a deterministic HMAC of the backend pool ID. Any replica serving the same `router.json` will route a follow-up for `r1_<token>_...` to the same backend as the replica that created the session.
+
+See <<Session ID Format>> for how this works and <<Identity Propagation>> for how the per-request identity survives across replicas.
+
+=== Can I send `SIGHUP` to pick up a new `router.json`?
+
+Yes — `SIGHUP` reloads the config (unless started with `-reload-on-sighup=false`). Reload is **fail-closed**: if the new config fails validation (schema violation, unresolvable secret, bad endpoint URL), the previous runtime keeps serving and the error is logged. You never serve a half-loaded config.
+
+What reloads: `users`, `guest`, `catalog`, `backend_pools`, `admin.token_ref`, `upstream_identity`. What needs a restart: `-listen`, `-metrics-listen`, `-log-format`, `-graceful-period`, `-session-attempt-timeout`, `-proxy-timeout`, `-reload-on-sighup`.
+
+See <<Reload (SIGHUP)>>.
+
+=== Why is my backend "unhealthy" but `curl` against its endpoint works fine?
+
+Gridlane's health tracking is **passive** — it marks a pool unhealthy after `failure_threshold` consecutive failing proxy attempts through the pool (5xx, 408/425/429, 401/403) and keeps it out of rotation for `cooldown`. There is no active probe. A backend that is fine right now but failed the last `failure_threshold` requests will stay out of rotation until `cooldown` expires, even if the underlying issue has recovered.
+
+Lower `cooldown` in the pool's `health` block if you are seeing recovery lag in development. In production the default makes retries cheap and prevents a flaky pool from burning the whole request flow.
+
+See <<Backend Health>>.
+
+=== Why does `/vnc/<id>` give 404 on a Playwright session that otherwise works fine?
+
+Gridlane picks the session ID for Playwright and tells Selenwright about it via `X-Selenwright-External-Session-ID` on the upgrade. If the Selenwright you're running does not accept that header, it mints its own random ID — the two sides then disagree about what the session is called, the session itself is fine (frames flow through the tunnel), but everything that addresses the session by ID afterwards (`/vnc/<id>`, `/video/<id>`, `/logs/<id>`, …) `404`s.
+
+Fix: use a Selenwright build that accepts the header. WebDriver is not affected — there the server picks the ID, so any Selenwright works.
+
+=== Do I need `upstream_identity` to use Gridlane?
+
+No. Without it, Gridlane still authenticates clients, enforces per-user quotas on its own side, and proxies transparently. Upstream Selenwright will see every session as coming from the pool-level BasicAuth account.
+
+Turn on `upstream_identity` when you want per-user quotas / session ACL / admin bypass on the **Selenwright** side as well, which is the common production case. See <<Identity Propagation>>.
+
+=== Why is `/metrics` requiring an admin token? I want to scrape it from Prometheus without one.
+
+On the main listener, `/metrics` is `admin` scope — Prometheus metrics carry per-route latency histograms and per-backend health, which you probably do not want to expose on an internet-reachable listener.
+
+For Prometheus scraping run a separate listener with `-metrics-listen :9090` (or another address). That listener serves `/metrics` with no auth and is intended to be bound to a private interface or an internal overlay network.
+
+=== Why is the HMAC for the route token not a configurable secret?
+
+Today the HMAC key used to derive the `<route-token>` prefix is a fixed domain separator (`gridlane-route-token-v1`), not a per-deployment secret. It stops an attacker from guessing the token for a specific backend pool ID, but two Gridlane deployments that happen to use the same `backend_pools[*].id` will produce identical tokens.
+
+This is acknowledged tech debt. A `-route-salt` flag that accepts an `env:` / `file:` reference is the planned path forward. Until then, keep pool IDs unique across deployments that might ever share traffic.

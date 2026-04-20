@@ -1,0 +1,133 @@
+== Authentication
+
+Gridlane authenticates every inbound request against a four-rung scope ladder. Each endpoint is registered at a scope, and a request is admitted only if its credentials satisfy that scope or a stricter one.
+
+=== The Scope Ladder
+
+----
+admin  >  user  >  side  >  public
+----
+
+[cols="1,1,4"]
+|===
+| Scope | Credential | Applies To
+
+| `public` | none | `/ping`, `/status` — liveness, public backend rollup
+| `user` | BasicAuth matching a `users[]` entry, **or** anonymous guest if `guest` is configured | `/quota`, session create and follow-up (WebDriver + Playwright)
+| `side` | BasicAuth matching a `users[]` entry (no guest fallback) | `/vnc/`, `/devtools/`, `/video/`, `/logs/`, `/download/`, `/downloads/`, `/clipboard/`, `/host/`, `/history/settings`
+| `admin` | `X-Gridlane-Admin-Token: <token>` header, **or** `Authorization: Bearer <token>` | `/config`, `/metrics` on the main listener
+|===
+
+A request is evaluated bottom-up — a valid admin token satisfies all four scopes; valid BasicAuth satisfies `user`, `side`, and `public`; guest satisfies only `user` and `public`.
+
+=== BasicAuth Users
+
+Defined in `router.json`:
+
+[source,json]
+----
+{
+  "users": [
+    {
+      "name": "alice",
+      "password_ref": "env:GRIDLANE_ALICE_PASSWORD",
+      "quota": { "max_sessions": 20 }
+    },
+    {
+      "name": "bob",
+      "password_ref": "file:/run/secrets/bob.password",
+      "quota": { "max_sessions": 5 }
+    }
+  ]
+}
+----
+
+* `name` must be unique across `users[]`.
+* `password_ref` resolves to a plaintext password at startup and on reload. See <<Secret References>>.
+* `quota.max_sessions` is the maximum concurrent sessions Gridlane will route for this user.
+
+Passwords are compared in constant time. BasicAuth credentials are consumed by Gridlane and are **not** forwarded upstream; if the backend pool enforces its own BasicAuth, use the pool-level `credentials` block — see <<Router Configuration>>.
+
+=== Guest Access
+
+When `guest` is configured, requests that arrive at a `user`-scope endpoint without BasicAuth (or with BasicAuth that does not match any `users[]` entry) are admitted as an anonymous guest:
+
+[source,json]
+----
+{
+  "guest": { "quota": { "max_sessions": 2 } }
+}
+----
+
+Guest requests share a single quota pool keyed on the literal subject `guest`. When the pool's `max_sessions` is reached, further guest session creates get `429`.
+
+Guest access applies to `user` scope only. Side endpoints **always** require named BasicAuth — there is no way to VNC into a guest-created session without authenticating as a user first.
+
+Omit the `guest` block entirely to disable anonymous access. At least one of `users[]` or `guest` must be present.
+
+=== Admin Token
+
+The admin scope unlocks endpoints that expose internal state (`/config`, `/metrics` on the main listener). Configure a reference to the token:
+
+[source,json]
+----
+{
+  "admin": { "token_ref": "env:GRIDLANE_ADMIN_TOKEN" }
+}
+----
+
+Gridlane reads the token at startup and on reload. Clients present it in one of two forms:
+
+[source,bash]
+----
+$ curl -fsS -H 'X-Gridlane-Admin-Token: root-token' http://127.0.0.1:4444/config
+$ curl -fsS -H 'Authorization: Bearer root-token'  http://127.0.0.1:4444/config
+----
+
+Both forms are compared in constant time. The Bearer form wins if both headers are set.
+
+If `admin.token_ref` is omitted, `/config` and main-listener `/metrics` are permanently unavailable — there is no in-band way to mint an admin token, deliberately.
+
+=== Secret References
+
+Passwords and tokens never appear in plaintext in `router.json`. Every `*_ref` field accepts one of:
+
+[cols="1,4"]
+|===
+| Form | Notes
+
+| `env:NAME` | Read from the `NAME` environment variable. Value must be non-empty at startup / reload
+| `file:/absolute/path` | Read from an absolute file path. Path must be absolute, cleaned (no `..` or trailing `/`), and readable. Trailing whitespace on the file content is trimmed
+|===
+
+Anything else — plaintext, relative path, bare `:` — is rejected with a validation error. This is a hard rule; there is no plaintext fallback.
+
+Secrets are re-resolved on every reload. Rotate a password by updating the referenced env var / file and sending `SIGHUP`.
+
+=== Constant-Time Comparison
+
+All password and token comparisons use `crypto/subtle.ConstantTimeCompare` after a length check. This is defense in depth; the primary protection against credential guessing is rate-limiting at the network edge, which Gridlane does not implement itself.
+
+=== What Gets Logged
+
+Gridlane logs the authenticated subject and scope on every request (`subject=alice scope=user`, `subject=guest scope=user`, `subject=admin scope=admin`). Passwords, tokens, and the `Authorization` header contents are never logged.
+
+=== Putting It Together
+
+A concrete routing example. Assume `users[]` has `alice`, `guest` is configured with `max_sessions=2`, and `admin.token_ref` points to `root-token`:
+
+[cols="3,2,3"]
+|===
+| Request | Scope checked | Outcome
+
+| `GET /ping` | public | 200, no auth required
+| `GET /status` | public | 200, backend rollup
+| `GET /quota` with BasicAuth `alice:...` | user | 200, returns Alice's quota
+| `GET /quota` with no auth | user | 200, returns guest quota (`guest` is configured)
+| `POST /wd/hub/session` with BasicAuth `alice:...` | user | Routed, counts against Alice's quota
+| `POST /wd/hub/session` with no auth | user | Routed as guest, counts against guest quota
+| `GET /vnc/r1_...` with BasicAuth `alice:...` | side | Proxied
+| `GET /vnc/r1_...` with no auth | side | 401 (guest cannot observe)
+| `GET /config` with `X-Gridlane-Admin-Token: root-token` | admin | 200, sanitized config
+| `GET /config` with BasicAuth `alice:...` | admin | 401 (user cannot see config)
+|===

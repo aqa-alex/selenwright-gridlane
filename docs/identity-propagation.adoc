@@ -1,0 +1,105 @@
+== Identity Propagation
+
+When Gridlane sits in front of Selenwright, the natural layout is: client authenticates to Gridlane, Gridlane authenticates to Selenwright with a pool-level service account. The downside is that Selenwright then sees every session as coming from the same account, so its own per-user quotas, session ACL, and admin-bypass collapse to a single identity.
+
+Gridlane's `upstream_identity` block solves this by propagating the **resolved client identity** downstream using the trusted-proxy pattern Selenwright already supports.
+
+=== Configuration
+
+Inside `router.json`:
+
+[source,json]
+----
+{
+  "upstream_identity": {
+    "user_header":  "X-Forwarded-User",
+    "admin_header": "X-Admin",
+    "secret_ref":   "env:GRIDLANE_ROUTER_SECRET"
+  }
+}
+----
+
+[cols="1,1,3"]
+|===
+| Field | Required | Notes
+
+| `user_header` | yes (when the block is present) | Header name for the identity subject. Selenwright's trusted-proxy default is `X-Forwarded-User`
+| `admin_header` | no | Header name that signals admin. When set, Gridlane stamps `true` iff the request authorized as Gridlane admin. Omit to not emit an admin flag
+| `secret_ref` | recommended | `env:` / `file:` reference to a shared secret. When set, Gridlane stamps `X-Router-Secret: <secret>` on every upstream request
+|===
+
+Omit the entire `upstream_identity` block to keep the legacy behavior — Gridlane authenticates the client on its own and forwards nothing about the identity upstream.
+
+=== What Gets Stamped
+
+On every upstream request Gridlane stamps:
+
+[source]
+----
+<user_header>:                alice
+<admin_header>:               true        # only if Gridlane admin
+X-Router-Secret:  <secret>    # only if secret_ref is set
+----
+
+For a guest-scope request, `<user_header>` is set to the literal string `guest` — it is still a named identity from Selenwright's perspective, just a shared one.
+
+The pool-level `credentials` block (BasicAuth injection) is independent of this. Gridlane can both inject `Authorization: Basic ...` for Selenwright's legacy `-htpasswd` mode **and** stamp identity headers. Selenwright will honour whichever matches its running auth mode.
+
+=== What Gets Stripped
+
+Before Gridlane's own auth layer runs, a middleware strips these headers from the **incoming** request:
+
+* `<user_header>` (e.g. `X-Forwarded-User`)
+* `<admin_header>` (e.g. `X-Admin`)
+* `X-Router-Secret`
+
+This means a client cannot set `X-Forwarded-User: alice` themselves and inherit Alice's identity downstream — the header is erased before any auth decision happens, and Gridlane re-derives the identity from the client's real credentials.
+
+NOTE: The strip is driven by whatever headers the `upstream_identity` block names, plus the router-secret header. Rename `user_header` to something odd like `X-Gridlane-Identity` and that becomes the stripped header.
+
+=== The Matching Selenwright Config
+
+Selenwright in `trusted-proxy` mode honours identity from headers **only** when the source is trusted. Run Selenwright with:
+
+[source,bash]
+----
+$ selenwright                                             \
+    -auth-mode=trusted-proxy                              \
+    -user-header=X-Forwarded-User                         \
+    -admin-header=X-Admin                                 \
+    -trusted-proxy-secret="$GRIDLANE_ROUTER_SECRET"
+----
+
+`-trusted-proxy-secret` must resolve to the same value as Gridlane's `upstream_identity.secret_ref`. Selenwright rejects any request whose `X-Router-Secret` does not match — so a direct client that bypasses Gridlane and tries to spoof `X-Forwarded-User` against Selenwright gets `401`.
+
+NOTE: Gridlane and Selenwright wire the same secret differently. Gridlane's `secret_ref` takes a `env:` / `file:` reference and resolves it at startup / on reload. Selenwright's `-trusted-proxy-secret` takes the plaintext value directly on the command line. Pass the secret into Selenwright through your process manager / compose file, not via hand-rolled shell.
+
+Selenwright also supports `-trusted-proxy-cidr` and `-trusted-proxy-mtls-ca` for additional source-trust validation. Combine them — `AND` across all configured checks — when the overlay network itself is not trustworthy.
+
+=== What The Upstream Sees
+
+With the setup above, Selenwright logs a `DELETE /session/<id>` like:
+
+----
+subject=alice admin=false source=trusted-proxy
+----
+
+And Selenwright enforces its own per-user ACL against `alice`, not against the pool service account. Alice can only kill her own sessions; a team member in Alice's Selenwright-side group can observe them; Selenwright admin bypass works for Gridlane admins.
+
+=== What Happens Without A Router Secret
+
+`secret_ref` is technically optional. Without it, Gridlane still stamps `X-Forwarded-User` / `X-Admin` on upstream requests, but there is nothing to distinguish a request from Gridlane from a direct client on the same network that forged `X-Forwarded-User`. Selenwright-side identity would be trivially spoofable.
+
+Leave `secret_ref` out **only** when the overlay network between Gridlane and Selenwright is itself authenticated (mTLS, a private overlay with no other clients) and Selenwright's `trusted-proxy-cidr` / `trusted-proxy-mtls-ca` already gate by source trust.
+
+For the default local-compose topology, always set `secret_ref`.
+
+=== Rotating The Router Secret
+
+Update the referenced env var or file and send `SIGHUP` to both Gridlane and Selenwright. Both sides re-resolve the secret on reload. There is a brief window during rotation where Gridlane and Selenwright disagree — plan the rotation order (update Selenwright's new value first, then flip Gridlane over) or accept a short read failure.
+
+=== Observability
+
+The log line on every request includes `subject=<name> scope=<scope>`. When an upstream request is made with identity headers, the line also includes `upstream_identity=true`. `/metrics` counts admin-scope requests separately (via the `route` label on `/config` / `/metrics`).
+
+See <<Observability>> for the full metric list.

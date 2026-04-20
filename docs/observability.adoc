@@ -1,0 +1,151 @@
+== Observability
+
+Three surfaces:
+
+* **Prometheus metrics** — structured counters, histograms, and gauges for every routing decision.
+* **Structured logs** — `log/slog` with a text or JSON backend.
+* **Status rollup** — public `/status` for external liveness / readiness probes.
+
+=== Metrics
+
+Prometheus text format on `/metrics`. On the main listener it is `admin` scope (`X-Gridlane-Admin-Token` or `Authorization: Bearer`). When `-metrics-listen` is set to a separate address (typically bound to a private interface), `/metrics` there has no auth.
+
+==== Counters
+
+[cols="2,2,3"]
+|===
+| Metric | Labels | Meaning
+
+| `gridlane_http_requests_total` | `method`, `route`, `status` | HTTP requests received, bucketed by route template and response status
+| `gridlane_proxy_requests_total` | `protocol`, `backend`, `outcome` | Proxy attempts to upstream backends; `outcome` is `success` (2xx/3xx), `failure` (5xx / 408 / 425 / 429 / upstream 401 / 403), `client_error` (other 4xx — caller's fault, does not degrade health), or `error` (transport failure before the upstream ever answered)
+| `gridlane_websocket_sessions_total` | `backend`, `event` | Playwright WebSocket session events; `event` is `started`, `upgraded`
+|===
+
+==== Histograms
+
+[cols="2,2,3"]
+|===
+| Metric | Labels | Buckets (seconds)
+
+| `gridlane_http_request_duration_seconds` | `method`, `route` | 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30
+| `gridlane_proxy_request_duration_seconds` | `protocol`, `backend` | same
+|===
+
+==== Gauges
+
+[cols="2,2,3"]
+|===
+| Metric | Labels | Meaning
+
+| `gridlane_backend_available` | `backend`, `region`, `protocols` | `1` when the pool is healthy, `0` when in cooldown
+| `gridlane_backend_failures_total` | `backend`, `region`, `protocols` | Current run of consecutive failures against the pool's `failure_threshold`. Reset to `0` on the first successful upstream request after the failures, and on cooldown expiration. Despite the `_total` suffix, this is emitted as a `gauge` — it is a live snapshot of the in-memory `Manager`, not a monotonic counter of all-time failures
+|===
+
+==== Route Labels Are Templates
+
+The `route` label on `gridlane_http_requests_total` and `gridlane_http_request_duration_seconds` is a fixed template, not the literal request path. Session IDs are rewritten to `:session`, browser/version pairs to `:browser/:version`, so cardinality stays bounded:
+
+----
+/ping
+/status
+/config
+/quota
+/metrics
+/history/settings
+/session/:session
+/wd/hub/session/:session
+/playwright/:browser/:version
+/host/:session
+/vnc/:session
+/devtools/:session
+/video/:session
+/logs/:session
+/download/:session
+/downloads/:session
+/clipboard/:session
+other
+----
+
+Anything that does not match a registered route maps to `other`. This is not a leak — Gridlane `404`s unknown paths — but it is worth watching for a sudden increase, which usually means a client is using the wrong URL shape.
+
+==== Example Queries
+
+Request rate per route:
+
+----
+sum by (route) (rate(gridlane_http_requests_total[1m]))
+----
+
+p95 proxy latency by backend:
+
+----
+histogram_quantile(0.95, sum by (le, backend) (rate(gridlane_proxy_request_duration_seconds_bucket[5m])))
+----
+
+Backends currently in cooldown:
+
+----
+gridlane_backend_available == 0
+----
+
+Error rate by backend:
+
+----
+sum by (backend) (rate(gridlane_proxy_requests_total{outcome="failure"}[1m]))
+  /
+sum by (backend) (rate(gridlane_proxy_requests_total[1m]))
+----
+
+=== Logs
+
+Gridlane emits one `log/slog` record per request and one per lifecycle event. Pick the format with `-log-format`:
+
+[source,bash]
+----
+$ ./gridlane -log-format text   # default, human-readable
+$ ./gridlane -log-format json   # one-line JSON, for log aggregators
+----
+
+Per-request fields:
+
+[cols="1,4"]
+|===
+| Field | Value
+
+| `msg` | `http request`
+| `method` | `GET`, `POST`, `DELETE`, …
+| `path` | Literal request path (not the template)
+| `status` | HTTP response status
+| `duration_ms` | Millisecond request duration
+| `subject` | Resolved identity: user name, `guest`, `admin`, or `-` for unauthenticated
+| `scope` | Scope the handler required (`public` / `user` / `side` / `admin`)
+| `backend` | Pool ID when the request was proxied
+| `route_token` | Public route token when the request carried a session ID
+|===
+
+Passwords, tokens, the `Authorization` header, and `X-Router-Secret` are **never** logged.
+
+Lifecycle log lines include config reload (`msg="config reloaded"` / `msg="config reload failed"`), startup (`msg="listening"`), and shutdown (`msg="gracefully stopping"`).
+
+=== `/status`
+
+Public JSON rollup for external health probes:
+
+[source,bash]
+----
+$ curl -fsS http://127.0.0.1:4444/status
+{
+  "service":         "gridlane",
+  "status":          "ok",
+  "backend_count":   2,
+  "available_count": 2
+}
+----
+
+`status` is `"ok"` when at least one pool is healthy, `"degraded"` otherwise. A `degraded` `/status` with `available_count=0` means every new session placement is failing with `503`.
+
+NOTE: `/status` reflects Gridlane's view of its pools only. An external probe that hits Selenwright through Gridlane should hit `/ping` (cheaper) or an actual session-create round-trip (deeper, slower).
+
+=== Tracing
+
+Gridlane does not emit OpenTelemetry spans today. The `gridlane_http_request_duration_seconds` histogram combined with `backend` / `route` labels is the current latency breakdown surface. If you need end-to-end tracing across Gridlane and Selenwright, run a sidecar proxy that injects W3C `traceparent` on the ingress edge — Gridlane forwards unknown request headers transparently.

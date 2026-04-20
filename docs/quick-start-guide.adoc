@@ -1,0 +1,131 @@
+== Quick Start Guide
+
+=== Prerequisites
+
+* Docker (recent version).
+* One or more running https://github.com/aqa-alex/selenwright[Selenwright] backends reachable from the host where you will run Gridlane.
+
+=== Minimum Viable `router.json`
+
+Gridlane reads a single strict-schema v1 JSON file. The smallest usable shape is **one user, one backend, and one browser**:
+
+[source,json]
+----
+{
+  "version": 1,
+  "users": [
+    {
+      "name": "alice",
+      "password_ref": "env:GRIDLANE_ALICE_PASSWORD",
+      "quota": { "max_sessions": 20 }
+    }
+  ],
+  "catalog": {
+    "browsers": [
+      {
+        "name": "chrome",
+        "versions": ["stable"],
+        "protocols": ["webdriver", "playwright"]
+      }
+    ]
+  },
+  "backend_pools": [
+    {
+      "id": "selenwright-a",
+      "endpoint": "http://selenwright-a:4444",
+      "region": "local-a",
+      "weight": 1,
+      "protocols": ["webdriver", "playwright"],
+      "health": { "enabled": true, "failure_threshold": 2, "cooldown": "10s" }
+    }
+  ]
+}
+----
+
+See <<Router Configuration>> for every field and validation rule. The parser uses `DisallowUnknownFields` — misspelled keys are rejected loudly, not silently ignored.
+
+NOTE: Passwords and tokens are **never** inlined in `router.json`. They live behind `env:NAME` or `file:/absolute/path` references and are resolved on startup and on reload.
+
+=== Start Gridlane
+
+[source,bash]
+----
+$ docker run -d --name gridlane                            \
+    -p 4444:4444 -p 9090:9090                              \
+    -v $(pwd)/router.json:/etc/gridlane/router.json:ro     \
+    -e GRIDLANE_ALICE_PASSWORD=wonderland                  \
+    aqa-alex/gridlane:latest-release                       \
+    -config /etc/gridlane/router.json                      \
+    -metrics-listen :9090
+----
+
+Gridlane listens on `:4444` by default. Change it with `-listen` (see <<CLI Flags>>). The image runs as unprivileged `65532:65532` and exposes `4444` (main listener) and `9090` (metrics listener, when `-metrics-listen` is set).
+
+To enable the admin scope (needed for `/config` and for `/metrics` on the main listener), add an `admin.token_ref` to the config and pass the corresponding environment variable:
+
+[source,bash]
+----
+$ docker run -d --name gridlane                            \
+    -p 4444:4444 -p 9090:9090                              \
+    -v $(pwd)/router.json:/etc/gridlane/router.json:ro     \
+    -e GRIDLANE_ALICE_PASSWORD=wonderland                  \
+    -e GRIDLANE_ADMIN_TOKEN=root-token                     \
+    aqa-alex/gridlane:latest-release                       \
+    -config /etc/gridlane/router.json                      \
+    -metrics-listen :9090
+----
+
+=== Point Your Tests At Gridlane
+
+Tests connect to Gridlane the same way they would connect to a single Selenwright instance:
+
+.Selenium WebDriver
+[source]
+----
+http://localhost:4444/wd/hub
+----
+
+.Playwright
+[source]
+----
+ws://localhost:4444/playwright/<browser>/<version>
+----
+
+Auth is HTTP BasicAuth (for `users[]`) or bearer token (for admin). See <<Authentication>> for the full picture.
+
+=== Smoke Checks
+
+[source,bash]
+----
+# Liveness — no auth
+$ curl -fsS http://127.0.0.1:4444/ping
+{"service":"gridlane","status":"ok"}
+
+# Backend rollup — no auth
+$ curl -fsS http://127.0.0.1:4444/status
+
+# Caller's own quota — BasicAuth
+$ curl -fsS -u alice:wonderland http://127.0.0.1:4444/quota
+
+# Sanitized config — admin token
+$ curl -fsS -H 'X-Gridlane-Admin-Token: root-token' http://127.0.0.1:4444/config
+----
+
+=== Running From Source
+
+Go 1.26, stdlib-only — no `go get`, no vendoring. Download a prebuilt binary from https://github.com/aqa-alex/selenwright-gridlane/releases/latest[releases] or build locally:
+
+[source,bash]
+----
+$ go build ./cmd/gridlane
+$ GRIDLANE_ALICE_PASSWORD=wonderland GRIDLANE_ADMIN_TOKEN=root-token \
+    ./gridlane -config router.json
+----
+
+Flags and config file are identical to the container path — the Docker image's `ENTRYPOINT` is the binary with no wrapper. Use this form when you are hacking on Gridlane itself, or in environments without a container runtime.
+
+=== What's Next
+
+* <<Running With Selenwright>> — two Selenwright backends behind Gridlane with trusted-proxy identity propagation, wired end-to-end.
+* <<Authentication>> — BasicAuth, guest access, admin token, and the scope ladder.
+* <<Router Configuration>> — every field in `router.json` with validation rules and secret-ref format.

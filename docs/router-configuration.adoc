@@ -1,0 +1,234 @@
+== Router Configuration
+
+Gridlane reads a single JSON file — `router.json` by default, override with `-config`. The schema is **strict**: unknown fields, missing required fields, invalid types, and unresolvable secret references are rejected at startup and on reload.
+
+=== Top-Level Shape
+
+[source,json]
+----
+{
+  "version":           1,
+  "users":             [ ... ],
+  "guest":             { ... },
+  "catalog":           { ... },
+  "backend_pools":     [ ... ],
+  "admin":             { ... },
+  "upstream_identity": { ... }
+}
+----
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `version` | int | yes | Must be `1`. The version prefix is also embedded in public session IDs
+| `users` | array | * | List of BasicAuth users. At least one of `users` or `guest` is required
+| `guest` | object | * | Anonymous guest scope. At least one of `users` or `guest` is required
+| `catalog` | object | yes | Advertised browsers and protocols
+| `backend_pools` | array | yes | Selenwright backends to route to (one or more)
+| `admin` | object | no | Admin token configuration
+| `upstream_identity` | object | no | Trusted-proxy identity propagation (see <<Identity Propagation>>)
+|===
+
+=== `users[]`
+
+[source,json]
+----
+{
+  "users": [
+    {
+      "name": "alice",
+      "password_ref": "env:GRIDLANE_ALICE_PASSWORD",
+      "quota": { "max_sessions": 20 }
+    }
+  ]
+}
+----
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `name` | string | yes | Non-empty, unique across `users[]`
+| `password_ref` | string | yes | `env:NAME` or `file:/absolute/path` — see <<Secret References>>
+| `quota.max_sessions` | int | yes | Must be > 0
+|===
+
+=== `guest`
+
+[source,json]
+----
+{ "guest": { "quota": { "max_sessions": 2 } } }
+----
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `quota.max_sessions` | int | yes | Must be > 0. Shared across all guest requests
+|===
+
+Omit the block to disable anonymous access. When enabled, guest applies to `user` scope only — side endpoints still require named BasicAuth. See <<Authentication>>.
+
+=== `catalog`
+
+[source,json]
+----
+{
+  "catalog": {
+    "browsers": [
+      {
+        "name": "chrome",
+        "versions": ["stable", "beta"],
+        "platforms": ["linux"],
+        "protocols": ["webdriver", "playwright"]
+      }
+    ]
+  }
+}
+----
+
+`catalog.browsers[]` must be non-empty. Per entry:
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `name` | string | yes | Non-empty, unique across `browsers[]`
+| `versions` | []string | yes | Non-empty. Each entry must be non-empty
+| `platforms` | []string | no | Optional; each entry must be non-empty
+| `protocols` | []string | yes | Non-empty. Allowed values: `webdriver`, `playwright`
+|===
+
+The catalog is advertised via `/quota` and is the authoritative source of truth for which Playwright `/<browser>/<version>` paths are accepted.
+
+=== `backend_pools[]`
+
+[source,json]
+----
+{
+  "backend_pools": [
+    {
+      "id":        "selenwright-a",
+      "endpoint":  "http://selenwright-a:4444",
+      "region":    "local-a",
+      "weight":    1,
+      "protocols": ["webdriver", "playwright"],
+      "credentials": {
+        "username_ref": "env:SELENWRIGHT_A_USER",
+        "password_ref": "env:SELENWRIGHT_A_PASSWORD"
+      },
+      "health": {
+        "enabled":            true,
+        "failure_threshold":  2,
+        "cooldown":           "10s"
+      }
+    }
+  ]
+}
+----
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `id` | string | yes | Non-empty, unique across `backend_pools[]`. Embedded in the route-token derivation; must stay stable
+| `endpoint` | string | yes | `http://` or `https://` URL. Host required. Must not embed `user:password@`
+| `region` | string | yes | Non-empty. Used for region-aware placement
+| `weight` | int | yes | Must be > 0. Weighted round-robin within a region
+| `protocols` | []string | yes | Non-empty. `webdriver`, `playwright`, or both
+| `credentials` | object | no | BasicAuth to inject on upstream requests — see below
+| `health` | object | no | Failure-threshold + cooldown health policy — see <<Backend Health>>
+|===
+
+`credentials` (optional):
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `username_ref` | string | yes (if `credentials` is set) | `env:` / `file:` reference
+| `password_ref` | string | yes (if `credentials` is set) | `env:` / `file:` reference
+|===
+
+`health` (optional):
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `enabled` | bool | no | Default `false`. When false, the pool is always considered healthy
+| `failure_threshold` | int | no | Must be zero or positive. Defaults to `1` when health is enabled
+| `cooldown` | string | no | Go duration string (`"10s"`, `"2m"`). Defaults to `30s`
+|===
+
+=== `admin`
+
+[source,json]
+----
+{ "admin": { "token_ref": "env:GRIDLANE_ADMIN_TOKEN" } }
+----
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `token_ref` | string | no | `env:` / `file:` reference. When omitted, `/config` and main-listener `/metrics` are permanently unavailable
+|===
+
+=== `upstream_identity`
+
+[source,json]
+----
+{
+  "upstream_identity": {
+    "user_header":  "X-Forwarded-User",
+    "admin_header": "X-Admin",
+    "secret_ref":   "env:GRIDLANE_ROUTER_SECRET"
+  }
+}
+----
+
+[cols="1,1,1,3"]
+|===
+| Field | Type | Required | Notes
+
+| `user_header` | string | yes (when the block is present) | Non-empty header name
+| `admin_header` | string | no | Header name for the admin flag
+| `secret_ref` | string | no | `env:` / `file:` reference to the shared router secret
+|===
+
+See <<Identity Propagation>> for the end-to-end behavior.
+
+=== Secret References
+
+Every `*_ref` field accepts exactly two forms:
+
+[cols="1,4"]
+|===
+| Form | Notes
+
+| `env:NAME` | Read from the `NAME` environment variable. The value must be present and non-empty at startup / reload
+| `file:/absolute/path` | Read from an absolute file path. Path must be absolute (no `..`, no trailing `/`). Surrounding whitespace is trimmed from the file content
+|===
+
+Anything else — a raw password string, a relative path, a URL — is rejected with a validation error. There is no plaintext fallback.
+
+Secrets are re-resolved on every reload. Rotate a secret by updating the env var or the file content, then `SIGHUP`.
+
+=== Validation Summary
+
+Gridlane validates the whole config before it replaces the live runtime. The most common reasons a reload (or startup) fails:
+
+* Unknown field (`DisallowUnknownFields`). Typos in field names are **not** silently ignored.
+* Duplicate `users[].name`, `catalog.browsers[].name`, or `backend_pools[].id`.
+* Empty required string or empty list where non-empty is required.
+* `backend_pools[*].endpoint` without scheme, with a wrong scheme (not `http://`/`https://`), without a host, or with embedded credentials.
+* `*_ref` that does not start with `env:` or `file:`, a `file:` path that is not absolute or not cleaned, or an env var that resolves to an empty string.
+* `health.cooldown` that is not a valid Go duration.
+
+Every failure is logged with the JSON path of the bad field (e.g. `backend_pools[1].endpoint must use http or https`) so a reload failure is self-diagnosing.
+
+=== Full Example
+
+See https://github.com/aqa-alex/selenwright-gridlane/blob/main/examples/router.compose.json[examples/router.compose.json] for the canonical example that ships with the repo.

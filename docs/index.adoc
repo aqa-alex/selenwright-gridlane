@@ -1,0 +1,60 @@
+= Gridlane
+:revdate: 2026-04-19
+:toc: left
+:toclevels: 3
+:sectnums:
+:sectanchors:
+:revnumber: latest
+:icons: font
+:source-highlighter: coderay
+:docinfo: shared
+:title: Gridlane - Router and load balancer for the Selenwright browser-automation grid
+:description: Gridlane routes Selenium WebDriver and Playwright traffic across a pool of Selenwright backends. Stateless across replicas, passive health with cooldown, per-user quotas, SIGHUP-reloadable router.json, and trusted-proxy identity propagation.
+
+This reference covers version: _{revnumber}_
+
+Gridlane is a stdlib-only Go router and load balancer for the https://github.com/aqa-alex/selenwright[Selenwright] browser-automation grid.
+It sits in front of N Selenwright backends and multiplexes Selenium WebDriver (HTTP), Playwright (WebSocket), and the side surfaces (VNC, logs, video, downloads, devtools, clipboard, artifact history) behind a single authenticated endpoint.
+Please refer to the https://github.com/aqa-alex/selenwright-gridlane[GitHub repository] if you need source code.
+
+== Getting Started
+
+Three entry points:
+
+* **<<Quick Start Guide>>** — you have a Selenwright backend (or two) and want traffic flowing through Gridlane in a few minutes. Covers `router.json`, BasicAuth, the smoke checks, and `docker run`.
+* **<<Running With Selenwright>>** — the compose recipe for two Selenwright backends behind Gridlane with trusted-proxy identity propagation end-to-end.
+* **<<FAQ>>** — the set of things people hit in the first hour: 401 on `/wd/hub/session` vs `/vnc/`, stale session IDs after a restart, what changes Gridlane can reload and what needs a restart.
+
+include::quick-start-guide.adoc[leveloffset=+1]
+include::running-with-selenwright.adoc[leveloffset=+1]
+include::faq.adoc[leveloffset=+1]
+
+== Routing
+
+One section per traffic shape Gridlane handles. The routing layer is stateless — public session IDs carry enough information for any Gridlane replica serving the same `router.json` to follow up a session created through a different replica.
+
+include::webdriver-routing.adoc[leveloffset=+1]
+include::playwright-routing.adoc[leveloffset=+1]
+include::session-id-format.adoc[leveloffset=+1]
+include::backend-health.adoc[leveloffset=+1]
+
+== Security
+
+Gridlane has a four-rung scope ladder (`admin` > `user` > `side` > `public`) and, when running in front of Selenwright, propagates the resolved identity downstream using the trusted-proxy pattern so Selenwright-side quotas and ACL keep working per-user instead of per-pool.
+
+include::authentication.adoc[leveloffset=+1]
+include::identity-propagation.adoc[leveloffset=+1]
+
+== Operations
+
+include::reload-sighup.adoc[leveloffset=+1]
+include::observability.adoc[leveloffset=+1]
+
+== Configuration Reference
+
+Complete list of knobs Gridlane honours — `router.json` schema, CLI flags, and how to run it in Docker.
+
+include::router-configuration.adoc[leveloffset=+1]
+include::http-api.adoc[leveloffset=+1]
+include::cli-flags.adoc[leveloffset=+1]
+include::docker.adoc[leveloffset=+1]

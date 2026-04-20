@@ -1,0 +1,113 @@
+== Backend Health
+
+Gridlane tracks the health of each backend pool passively — there is no active health probe. A pool is marked unhealthy after a configured number of consecutive failing proxy attempts, kept out of rotation for a cooldown window, and then returned automatically.
+
+=== Configuration
+
+Per-pool, inside `router.json`:
+
+[source,json]
+----
+{
+  "id": "selenwright-a",
+  "endpoint": "http://selenwright-a:4444",
+  ...
+  "health": {
+    "enabled": true,
+    "failure_threshold": 2,
+    "cooldown": "10s"
+  }
+}
+----
+
+[cols="1,1,3"]
+|===
+| Field | Default | Notes
+
+| `enabled` | `false` | When false, the pool is always considered healthy and failure counting is disabled
+| `failure_threshold` | `1` | Consecutive failures that trip the pool into the unhealthy state. Must be zero or positive
+| `cooldown` | `30s` | Go duration string (`"10s"`, `"2m"`, `"500ms"`). Time the pool stays out of rotation after it trips
+|===
+
+=== What Counts As A Failure
+
+Gridlane classifies every proxied request outcome:
+
+[cols="1,1,3"]
+|===
+| Class | Counts as | Notes
+
+| 2xx, 3xx | success | Clears the pool's failure counter
+| 408, 425, 429 | failure | Upstream is overloaded or rate-limiting
+| 401, 403 | failure | Upstream auth drift — usually a misconfigured shared secret or rotated backend credentials
+| 5xx | failure | Upstream error or transport error (connection refused, TLS handshake failure, timeout)
+| 4xx (other) | client error | Neither success nor failure; does not touch the counter
+|===
+
+Transport-level errors (`connection refused`, `i/o timeout`, etc.) are surfaced as `502 Bad Gateway` to the client and count as a failure.
+
+=== State Machine
+
+----
+                    +-------------+
+   success          |             |   failure (threshold-1 times)
+ +-----------------▶|   healthy   |◀-+
+ |                  |             |  |
+ |                  +------+------+  |
+ |                         |         |
+ |                  (threshold reached)
+ |                         |
+ |                         ▼
+ |                  +-------------+
+ |                  |             |
+ +------------------+  unhealthy  |  cooldown expires
+                    |             +----- returns to healthy
+                    +-------------+
+----
+
+* `ReportFailure()` increments the failure counter. When the counter reaches `failure_threshold`, `unhealthyUntil = now() + cooldown` and the pool is removed from new-session placement.
+* `ReportSuccess()` clears the failure counter to zero. If called during the cooldown window it is a no-op for the unhealthy state — the pool still needs the cooldown to expire. This avoids a single successful follow-up request rapidly bouncing a flaky pool back into rotation.
+* Time alone recovers the pool — when `now() >= unhealthyUntil`, the pool returns to the healthy state with a fresh counter.
+
+=== Placement vs Follow-Up
+
+Health affects **new session placement only**. A session that already exists on a now-unhealthy pool is still routed to that pool on follow-up, because:
+
+* The session exists on that specific backend. Sending the follow-up elsewhere guarantees `404`.
+* The follow-up may itself be successful and clear the pool's failure counter.
+
+See <<Session ID Format>> for how follow-up routing works.
+
+=== `/status` Rollup
+
+`GET /status` returns a rolled-up view of all pools:
+
+[source,json]
+----
+{
+  "service":         "gridlane",
+  "status":          "ok",
+  "backend_count":   2,
+  "available_count": 2
+}
+----
+
+`available_count` is the number of pools currently in the healthy state. If any pool is in cooldown, `available_count < backend_count`. If no pool is healthy, `status` becomes `degraded` and new session placement returns `503`.
+
+`/status` is public — no auth required. It is intended for external health-check probes.
+
+=== `gridlane_backend_available` Metric
+
+Per-pool health is also exposed as a gauge:
+
+[source]
+----
+gridlane_backend_available{backend="selenwright-a",region="local-a",protocols="webdriver,playwright"} 1
+gridlane_backend_failures_total{backend="selenwright-a",region="local-a",protocols="webdriver,playwright"} 17
+----
+
+`available` is `1` when the pool is in the healthy state, `0` when in cooldown. `failures_total`, despite its name, is the count of **current consecutive failures** — it ticks up while the pool misbehaves and resets to `0` on the first subsequent success or when the cooldown expires. See <<Observability>>.
+
+=== When To Tune
+
+Defaults (`failure_threshold=1`, `cooldown=30s`) are tuned for production where any backend failure is a real signal and a brief removal from rotation is cheap. In local development with a single backend, you probably want `failure_threshold=3` and `cooldown=5s` so a transient issue during setup does not shut down the whole grid. For very flaky environments (shared CI hosts, spot instances), bump `failure_threshold` higher to avoid oscillation.

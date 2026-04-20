@@ -1,0 +1,105 @@
+== Reload (SIGHUP)
+
+Gridlane reloads `router.json` on `SIGHUP` without restarting the process. Reload is **fail-closed**: if the new config is invalid, the previous runtime keeps serving and the error is logged. You never serve a half-loaded config and you never go "dark" because of a typo.
+
+=== Triggering A Reload
+
+[source,bash]
+----
+$ kill -HUP $(pidof gridlane)
+----
+
+Inside Docker:
+
+[source,bash]
+----
+$ docker kill -s HUP gridlane
+----
+
+Disable with `-reload-on-sighup=false` if you prefer to roll out config changes via restart only.
+
+=== What Gets Reloaded
+
+Everything that lives in `router.json`:
+
+* `users[]` — add / remove / rename users, change passwords (re-resolves `password_ref`), change quotas.
+* `guest` — add / remove guest access, change guest quota.
+* `catalog` — add / remove browsers, change advertised versions / protocols / platforms.
+* `backend_pools[]` — add / remove pools, change endpoints, weights, regions, credentials, health policies.
+* `admin.token_ref` — rotate the admin token (re-resolves).
+* `upstream_identity` — turn trusted-proxy propagation on or off, rotate the router secret.
+
+Health state is **reset** for pools that are new or whose `endpoint` / `id` changed. Pools that survive the reload unchanged keep their failure counter and cooldown state.
+
+=== What Needs A Restart
+
+Anything that is not in `router.json` — that is, every CLI flag:
+
+* `-listen`, `-metrics-listen` — changing the listen address requires a new socket.
+* `-log-format` — the logger is built once at startup.
+* `-graceful-period`, `-session-attempt-timeout`, `-proxy-timeout`.
+* `-reload-on-sighup` — the signal handler is wired once at startup.
+
+Flags are frozen at startup. Move anything you need to tune live into `router.json` fields.
+
+=== Fail-Closed Semantics
+
+Reload proceeds in phases:
+
+. Gridlane reads the config file from disk. If the read fails (file missing, permission denied), the error is logged and the current runtime is kept. No change.
+. The config is parsed with `DisallowUnknownFields`. If parsing fails, error logged, current runtime kept.
+. The parsed config is validated (schema rules, duplicate IDs, bad endpoints, invalid durations). If validation fails, error logged, current runtime kept.
+. Every `*_ref` is resolved against environment and filesystem. If any reference fails (env var unset, file unreadable, trimmed value empty), error logged, current runtime kept.
+. A new handler + health manager are built. If construction fails (should not happen with a validated config, but defensive), current runtime kept.
+. Only when all of the above succeed is the live handler atomically swapped to the new one.
+
+The swap is a single `atomic.Value.Store` call. Concurrent in-flight requests finish against whichever handler they started with — there is no torn state where a request sees a mix of old and new config.
+
+=== Observability
+
+A reload logs one of:
+
+[source]
+----
+level=info  msg="config reloaded"              path=/etc/gridlane/router.json
+level=error msg="config reload failed"         path=/etc/gridlane/router.json error="..."
+----
+
+The `error` message is the specific validation or resolution failure so you can fix the file and SIGHUP again without reading through the whole process log.
+
+=== Inspecting The Loaded Config
+
+Confirm the new config took effect with the admin `/config` endpoint:
+
+[source,bash]
+----
+$ curl -fsS -H 'X-Gridlane-Admin-Token: root-token' http://127.0.0.1:4444/config
+----
+
+The response is the sanitized view of the live config — secrets are redacted, resolved values are **not** included. If `/config` still shows the old pool list after a `SIGHUP`, the reload either did not happen (log) or failed (log). Check the log.
+
+=== Degraded State
+
+If Gridlane starts up successfully but the current runtime is later invalidated (for example, the file that `admin.token_ref=file:...` points at is deleted, then `SIGHUP` is sent), the reload fails and the **old** runtime keeps serving. The admin token the old runtime loaded on startup is still valid.
+
+The runtime is only torn down on process exit.
+
+=== Typical Workflows
+
+==== Rotate a user password
+
+. Update the env var or file referenced by `password_ref`.
+. `kill -HUP` Gridlane.
+. The next request from that user with the new password is admitted; requests with the old password get `401`.
+
+==== Add a new backend pool
+
+. Add the pool entry to `router.json`.
+. `kill -HUP` Gridlane.
+. The new pool starts receiving a proportional share of new session placements immediately. Existing sessions continue against their original pools.
+
+==== Take a pool out of rotation
+
+. Remove the pool from `backend_pools[]`.
+. `kill -HUP` Gridlane.
+. New sessions no longer go to that pool. **Existing sessions on that pool return 404 on follow-up** — their route token no longer matches any live pool. If you need a graceful drain, drop the pool's `weight` to a tiny value first, let sessions churn, then remove it in a second reload.

@@ -1,0 +1,104 @@
+== CLI Flags
+
+All CLI flags are frozen at startup — none of them reload on `SIGHUP`. Everything tunable at runtime lives in <<Router Configuration>>.
+
+=== Listeners
+
+----
+-listen string
+    Main HTTP listen address (default ":4444"). Serves WebDriver,
+    Playwright, side endpoints, /ping, /status, /quota, /config, and
+    /metrics (admin-scoped on this listener).
+
+-metrics-listen string
+    Optional separate Prometheus listen address (e.g. ":9090"). When
+    set, /metrics on this listener is exposed with no authentication
+    — intended for internal-only binds or a private overlay network.
+    When empty (default), /metrics is only available on the main
+    listener under admin scope.
+----
+
+=== Configuration
+
+----
+-config string
+    Path to router.json (default "router.json"). See
+    <<Router Configuration>> for the schema.
+
+-reload-on-sighup
+    Reload config on SIGHUP (default true). Reload is fail-closed —
+    an invalid new config keeps the prior runtime serving. Set to
+    false to disable SIGHUP handling entirely. See <<Reload (SIGHUP)>>.
+----
+
+=== Timeouts
+
+----
+-graceful-period duration
+    Graceful shutdown period (default 15s). On SIGINT/SIGTERM,
+    Gridlane stops accepting new connections and waits up to this
+    long for in-flight requests to finish before force-closing.
+
+-session-attempt-timeout duration
+    Upstream session creation timeout (default 30s). Upper bound on
+    how long a WebDriver POST /session or a Playwright upgrade may
+    take against the backend before Gridlane gives up and returns
+    a 503.
+
+-proxy-timeout duration
+    Per-request upstream proxy timeout (default 5m). Upper bound on
+    any other proxied request (WebDriver follow-ups, side endpoints).
+    WebSocket connections are not subject to this timeout after the
+    101 Switching Protocols — idle WebSockets are closed by the
+    usual Selenwright-side session idle timeout.
+----
+
+Durations use Go `time.Duration` format: `500ms`, `30s`, `2m`, `1h`.
+
+=== Logging
+
+----
+-log-format string
+    Log format (default "text"). "text" is human-readable; "json"
+    emits one-line structured JSON via log/slog — feed this directly
+    into a log aggregator.
+----
+
+See <<Observability>> for the field catalog.
+
+=== Miscellaneous
+
+----
+-version
+    Print the version and exit. Set at build time via the
+    `-X main.version=<tag>` ldflag (goreleaser populates this).
+----
+
+=== Defaults Summary
+
+[cols="2,2,4"]
+|===
+| Flag | Default | Notes
+
+| `-listen` | `:4444` | Main HTTP listener
+| `-metrics-listen` | *(empty)* | Separate unauthenticated metrics listener
+| `-config` | `router.json` | Path to the config file
+| `-graceful-period` | `15s` | Shutdown drain
+| `-session-attempt-timeout` | `30s` | Upstream session-create timeout
+| `-proxy-timeout` | `5m` | Upstream request timeout
+| `-reload-on-sighup` | `true` | Reload config on SIGHUP
+| `-log-format` | `text` | `text` or `json`
+| `-version` | — | Print version and exit
+|===
+
+=== Example
+
+[source,bash]
+----
+$ ./gridlane                                              \
+    -listen         :4444                                 \
+    -metrics-listen :9090                                 \
+    -config         /etc/gridlane/router.json             \
+    -log-format     json                                  \
+    -proxy-timeout  10m
+----

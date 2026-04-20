@@ -1,0 +1,38 @@
+name: docs
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/**'
+      - 'ci/docs.sh'
+      - '.github/workflows/docs.yml'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            echo "tagname=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tagname=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish docs to gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ci/docs.sh "${{ steps.tag.outputs.tagname }}"

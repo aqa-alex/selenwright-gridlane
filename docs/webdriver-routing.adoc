@@ -1,0 +1,88 @@
+== WebDriver Routing
+
+Gridlane routes Selenium WebDriver (W3C) traffic on the same listener as Playwright. A WebDriver client sees Gridlane as a standard hub endpoint:
+
+[source]
+----
+http://<gridlane>:4444/wd/hub
+----
+
+Both the Selenoid-style prefix (`/wd/hub/session`, `/wd/hub/session/<id>/...`) and the bare W3C prefix (`/session`, `/session/<id>/...`) are accepted.
+
+=== Session Create
+
+The session-create request (`POST /session` or `POST /wd/hub/session`) carries the W3C capabilities payload. Gridlane parses `browserName` and, when present, `browserVersion` + `platformName` from `alwaysMatch`/`firstMatch`, and looks up a browser entry in the loaded catalog:
+
+* The browser name must be listed in `catalog.browsers[]`.
+* At least one `backend_pools[]` entry whose `protocols` contains `"webdriver"` must be healthy.
+
+If no matching pool is available the client gets `503 Service Unavailable`; if the browser is not in the catalog the client gets `400 Bad Request` with a W3C-shaped error body.
+
+Pool selection is weighted. Each healthy pool contributes `weight` slots to the selection pool, and region filtering is applied when the client requests a specific region via capabilities extension (`selenwright:options.region`). A region mismatch falls back to any region.
+
+Once a backend accepts the session create, Gridlane:
+
+. Reads the upstream session ID from the response body.
+. Rewrites it into a public ID `r1_<route-token>_<upstream-id>` — see <<Session ID Format>>.
+. Rewrites the response body so the client sees only the public ID.
+
+The public ID is what the client uses for every follow-up.
+
+=== Session Follow-Up
+
+Follow-up requests (`GET /session/<id>/url`, `DELETE /session/<id>`, …) carry the public ID on the path. Gridlane splits `r1_<route-token>_<upstream-id>`:
+
+* `<route-token>` selects the backend pool (deterministic HMAC over `pool.id`).
+* `<upstream-id>` replaces the public ID on the rewritten request path before the request is proxied.
+
+Because the mapping is deterministic, any Gridlane replica that has the same `router.json` loaded will route the same follow-up to the same pool without any shared state. Replicas can be round-robin'd behind an L4 load balancer.
+
+=== Upstream Credentials
+
+If the Selenwright backend enforces its own BasicAuth (or any `Authorization` header), configure it per-pool:
+
+[source,json]
+----
+{
+  "id": "selenwright-a",
+  "endpoint": "http://selenwright-a:4444",
+  "credentials": {
+    "username_ref": "env:SELENWRIGHT_A_USER",
+    "password_ref": "env:SELENWRIGHT_A_PASSWORD"
+  },
+  ...
+}
+----
+
+Gridlane injects BasicAuth on the proxied request with these credentials. The client's own `Authorization` header is consumed by Gridlane's auth layer and is not forwarded.
+
+If `upstream_identity` is configured, Gridlane additionally stamps `X-Forwarded-User`, optionally `X-Admin`, and `X-Router-Secret` on every upstream request — see <<Identity Propagation>>.
+
+=== Capabilities Pass-Through
+
+Gridlane is protocol-transparent for WebDriver capabilities — whatever the client sends in `alwaysMatch`/`firstMatch` is forwarded to Selenwright verbatim. Gridlane does not enforce a capability policy of its own; that lives on the Selenwright side (see Selenwright's `-caps-policy` flag).
+
+=== Quotas
+
+Every new session counts against the caller's quota (`users[*].quota.max_sessions` or `guest.quota.max_sessions`). When the quota is reached, Gridlane returns `429 Too Many Requests` without attempting the upstream call.
+
+Quotas count concurrent sessions that Gridlane has routed for the caller. A session that ends (client `DELETE`, upstream timeout, upstream 5xx) releases the slot.
+
+The caller can query their own live quota state at `GET /quota` — see <<HTTP API>>.
+
+=== Errors
+
+Gridlane returns W3C-shaped error bodies (`{"value":{"error":"...","message":"...","stacktrace":""}}`) on session create so W3C clients interpret the failure correctly:
+
+[cols="1,1,4"]
+|===
+| Status | `error` code | When
+
+| `400` | `invalid argument` | Browser not in catalog; malformed capabilities payload
+| `401` | n/a (no body)     | BasicAuth missing or wrong, no guest fallback
+| `403` | n/a               | Admin-scope endpoint called without admin token
+| `429` | `session not created` | Caller's quota reached
+| `503` | `session not created` | No healthy backend pool matches the request
+|===
+
+Follow-up requests (`GET /session/<id>/...`) return the upstream response as-is, including upstream-generated W3C errors, with the session ID rewritten back to the public form.

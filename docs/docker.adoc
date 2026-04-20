@@ -1,0 +1,146 @@
+== Docker
+
+The published image is a minimal two-stage Alpine build. The binary is the image's `ENTRYPOINT`, so every argument on `docker run` becomes a Gridlane CLI flag.
+
+* Build stage: `golang:1.26.2-alpine`, `CGO_ENABLED=0`, `-trimpath -ldflags="-s -w"`.
+* Final stage: `alpine:3.23` with `ca-certificates` and `tzdata`.
+* Runs as unprivileged `65532:65532`.
+* Exposes `4444` (main listener) and `9090` (optional metrics listener).
+
+=== Standalone Container
+
+[source,bash]
+----
+$ docker run -d --name gridlane                               \
+    -p 4444:4444 -p 9090:9090                                 \
+    -v $(pwd)/router.json:/etc/gridlane/router.json:ro        \
+    -e GRIDLANE_ALICE_PASSWORD=wonderland                     \
+    -e GRIDLANE_ADMIN_TOKEN=root-token                        \
+    aqa-alex/gridlane:latest-release                          \
+    -config /etc/gridlane/router.json                         \
+    -metrics-listen :9090                                     \
+    -log-format json
+----
+
+Mount the config read-only. Pass secrets through environment variables — Gridlane reads them at startup and on reload via the `env:NAME` references in `router.json`.
+
+Rotate a password or the admin token:
+
+[source,bash]
+----
+# Update the referenced env var on the host, then:
+$ docker kill -s HUP gridlane
+----
+
+(`env:` references pin the value **at process start**. To rotate the in-process value you either restart the container or, for `file:` references, update the mounted file and send SIGHUP. For strict rotations without restart, use `file:` refs with a tmpfs secret mount.)
+
+=== Docker Compose
+
+End-to-end recipe: one Gridlane in front of two Selenwright backends, with trusted-proxy identity propagation. See <<Running With Selenwright>> for the `router.json` shape.
+
+[source,yaml]
+----
+version: "3.9"
+
+networks:
+  gridlane-integration:
+
+services:
+  gridlane:
+    image: aqa-alex/gridlane:latest-release
+    networks: [gridlane-integration]
+    ports:
+      - "4444:4444"
+      - "9090:9090"
+    volumes:
+      - ./router.json:/etc/gridlane/router.json:ro
+    environment:
+      GRIDLANE_ALICE_PASSWORD: "${GRIDLANE_ALICE_PASSWORD:?required}"
+      GRIDLANE_ADMIN_TOKEN:    "${GRIDLANE_ADMIN_TOKEN:?required}"
+      GRIDLANE_ROUTER_SECRET:  "${GRIDLANE_ROUTER_SECRET:?required}"
+    command:
+      - "-listen"
+      - ":4444"
+      - "-metrics-listen"
+      - ":9090"
+      - "-config"
+      - "/etc/gridlane/router.json"
+      - "-log-format"
+      - "json"
+      - "-proxy-timeout"
+      - "10m"
+
+  selenwright-a:
+    image: aqa-alex/selenwright:latest-release
+    networks: [gridlane-integration]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      GRIDLANE_ROUTER_SECRET: "${GRIDLANE_ROUTER_SECRET:?required}"
+    command:
+      - "-auth-mode=trusted-proxy"
+      - "-user-header=X-Forwarded-User"
+      - "-admin-header=X-Admin"
+      - "-trusted-proxy-secret=${GRIDLANE_ROUTER_SECRET}"
+      - "-limit=20"
+      - "-timeout=10m"
+
+  selenwright-b:
+    image: aqa-alex/selenwright:latest-release
+    networks: [gridlane-integration]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      GRIDLANE_ROUTER_SECRET: "${GRIDLANE_ROUTER_SECRET:?required}"
+    command:
+      - "-auth-mode=trusted-proxy"
+      - "-user-header=X-Forwarded-User"
+      - "-admin-header=X-Admin"
+      - "-trusted-proxy-secret=${GRIDLANE_ROUTER_SECRET}"
+      - "-limit=20"
+      - "-timeout=10m"
+----
+
+Bring it up with the three secrets in your environment:
+
+[source,bash]
+----
+$ GRIDLANE_ALICE_PASSWORD=wonderland   \
+  GRIDLANE_ADMIN_TOKEN=root-token      \
+  GRIDLANE_ROUTER_SECRET=dev-secret    \
+  docker compose up --build
+----
+
+Exposed ports:
+
+[cols="1,4"]
+|===
+| Port | Role
+
+| `4444` | Main Gridlane listener — WebDriver, Playwright, side endpoints, `/ping`, `/status`, `/quota`, `/config`, admin-scoped `/metrics`
+| `9090` | Unauthenticated Prometheus `/metrics` — bind to a private interface in production
+|===
+
+Smoke checks follow the pattern from <<Running With Selenwright>>.
+
+=== Building The Image Locally
+
+[source,bash]
+----
+$ docker build -t gridlane:local .
+----
+
+The `Dockerfile` is a multi-stage build with no build-time args you need to set. The resulting image tag is `gridlane:local`; run it the same way as the published image.
+
+=== Image Tags
+
+[cols="1,4"]
+|===
+| Tag | Published On
+
+| `latest` | Every push to `main` (CI build)
+| `latest-release` | Every GitHub release
+| `<version>` (e.g. `0.3.1`) | Per-release semver tag
+|===
+
+Pin production deployments to a specific semver tag, not `latest-release`.

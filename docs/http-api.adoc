@@ -1,0 +1,158 @@
+== HTTP API
+
+Gridlane serves every route on the main listener (`-listen`, default `:4444`). Optionally `/metrics` can be exposed on a separate listener (`-metrics-listen`) with no auth — intended for private-network scraping.
+
+Every route is registered at a scope. See <<Authentication>> for the credential model.
+
+=== Summary
+
+[cols="2,1,5"]
+|===
+| Path | Scope | Notes
+
+| `GET /ping` | public | Liveness
+| `GET /status` | public | Backend rollup
+| `GET /quota` | user | Caller's own quota (plus guest quota if configured)
+| `GET /config` | admin | Sanitized live `router.json`
+| `GET /metrics` | admin on main / public on `-metrics-listen` | Prometheus text format
+| `POST /session`, `POST /wd/hub/session` | user | WebDriver session create
+| `* /session/:id/*`, `* /wd/hub/session/:id/*` | user | WebDriver session follow-up
+| `GET /playwright/:browser/:version` | user | Playwright WebSocket upgrade
+| `GET /host/:id` | side | JSON describing the backend the session is pinned to
+| `GET /vnc/:id` | side | VNC live stream — WebSocket upgrade
+| `GET /devtools/:id/*` | side | Chrome DevTools Protocol — WebSocket upgrade
+| `GET /logs/:id` | side | Live session logs — WebSocket upgrade
+| `GET /video/:id`, `GET /video/:id.mp4` | side | Recorded session video — HTTP file download
+| `GET /download/:id/:name` | side | HTTP file download from inside the session
+| `GET /downloads/:id` | side | HTTP directory listing for the session's downloads
+| `GET /clipboard/:id`, `POST /clipboard/:id` | side | HTTP clipboard read/write
+| `GET /history/settings`, `GET /history/settings/*` | side | Selenwright artifact-history settings (HTTP)
+|===
+
+=== `GET /ping`
+
+Liveness. Returns `200` with a fixed body. No auth.
+
+[source,bash]
+----
+$ curl -fsS http://127.0.0.1:4444/ping
+{"service":"gridlane","status":"ok"}
+----
+
+=== `GET /status`
+
+Rolled-up backend view. No auth.
+
+[source,bash]
+----
+$ curl -fsS http://127.0.0.1:4444/status
+{
+  "service":         "gridlane",
+  "status":          "ok",
+  "backend_count":   2,
+  "available_count": 2
+}
+----
+
+`status` is `"ok"` when at least one pool is healthy, `"degraded"` otherwise. See <<Backend Health>>.
+
+=== `GET /quota`
+
+Caller's own quota. `user` scope — BasicAuth matches the returned user, or (when `guest` is configured) an unauthenticated request returns the guest quota.
+
+[source,bash]
+----
+$ curl -fsS -u alice:wonderland http://127.0.0.1:4444/quota
+{
+  "users": [
+    { "name": "alice", "quota": { "max_sessions": 20 } }
+  ],
+  "guest": { "quota": { "max_sessions": 2 } }
+}
+----
+
+The `users` array contains only the requesting user; other users' quotas are never exposed. `guest` is omitted when guest access is disabled.
+
+=== `GET /config`
+
+Sanitized live config — no secrets, no resolved passwords, no admin token. `admin` scope.
+
+[source,bash]
+----
+$ curl -fsS -H 'X-Gridlane-Admin-Token: root-token' http://127.0.0.1:4444/config
+----
+
+Returns a JSON body shaped like `router.json` with `*_ref` fields rendered as-is (`"env:GRIDLANE_ALICE_PASSWORD"`) and no resolved plaintext. Safe to dump into a log or paste into a ticket.
+
+=== `GET /metrics`
+
+Prometheus text format. On the main listener it is `admin` scope; on the `-metrics-listen` listener it has no auth. See <<Observability>> for the metric list.
+
+=== WebDriver
+
+`POST /session` or `POST /wd/hub/session` — `user` scope. Gridlane routes the session create by catalog + weighted pool selection, then rewrites the upstream session ID in the response body to the public form.
+
+Follow-up requests (`GET /session/<id>/url`, `DELETE /session/<id>`, …) route by the `<route-token>` embedded in the public ID. Gridlane rewrites the session segment on the upstream path before proxying.
+
+See <<WebDriver Routing>>.
+
+=== Playwright
+
+`GET /playwright/<browser>/<version>` with `Upgrade: websocket` — `user` scope. Gridlane mints a public session ID, sends the upgrade upstream with `X-Selenwright-External-Session-ID`, and echoes the public ID back on the `101` response in `X-Selenwright-Session-ID`.
+
+See <<Playwright Routing>>.
+
+=== Side Endpoints
+
+All side endpoints are `side` scope — BasicAuth matching a `users[]` entry, **no guest fallback**. The session ID on the path is the Gridlane public ID; Gridlane decodes it, picks the backend by the embedded route-token, and rewrites the upstream path per protocol: for WebDriver it substitutes the decoded upstream ID (Selenwright stored the session under that); for Playwright it keeps the public ID (Selenwright stored the session under the public ID via `X-Selenwright-External-Session-ID`). For `/video/` Gridlane appends `.mp4` if the client omitted it.
+
+==== HTTP vs WebSocket by endpoint
+
+Side endpoints are a mix of HTTP requests and WebSocket streams; Gridlane's reverse proxy handles both transparently, but the client has to speak the right protocol.
+
+[cols="2,3"]
+|===
+| Endpoint | Transport
+
+| `/vnc/<id>` | **WebSocket** — live VNC stream; client must send `Upgrade: websocket`
+| `/devtools/<id>/...` | **WebSocket** — Chrome DevTools Protocol
+| `/logs/<id>` | **WebSocket** — live session-log stream. There is no HTTP body here — `curl http://…/logs/<id>` returns `400`; use a WS client. The log *file* on disk (when `-log-output-dir` and `-save-all-logs` are set on Selenwright) is not exposed over HTTP by Selenwright and therefore not by Gridlane
+| `/video/<id>`, `/video/<id>.mp4` | HTTP file download — the recorded mp4
+| `/download/<id>/<name>` | HTTP file download — one file from the session's download area
+| `/downloads/<id>` | HTTP directory listing (usually JSON)
+| `/clipboard/<id>` | HTTP — `GET` reads, `POST` writes
+| `/host/<id>` | HTTP (Gridlane-only) — JSON describing the backend the session is pinned to
+| `/history/settings`, `/history/settings/*` | HTTP
+|===
+
+Gridlane is a thin reverse proxy for all of these — response body, content type and upstream headers pass through untouched apart from the session-ID rewriting described above.
+
+=== Error Shapes
+
+Most endpoints return a minimal body on failure — the status code is authoritative:
+
+[cols="1,3"]
+|===
+| Status | Meaning
+
+| `400` | Malformed path, missing required segment, unknown browser/version, bad session ID format
+| `401` | Credentials missing or rejected (and no guest fallback for this scope)
+| `403` | Scope mismatch (e.g. admin endpoint with user credentials)
+| `404` | Unknown path, or session ID whose route-token does not match any live pool
+| `429` | Caller's quota reached
+| `502` | Upstream transport failure
+| `503` | No healthy backend pool matches; or reload has not completed on a cold start
+|===
+
+WebDriver session create returns a W3C-shaped error body on `4xx`/`5xx`:
+
+[source,json]
+----
+{
+  "value": {
+    "error":      "session not created",
+    "message":   "no healthy backend pool matches webdriver",
+    "stacktrace": ""
+  }
+}
+----

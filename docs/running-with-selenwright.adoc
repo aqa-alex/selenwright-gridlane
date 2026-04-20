@@ -1,0 +1,127 @@
+== Running With Selenwright
+
+Minimal end-to-end recipe: one Gridlane in front of two Selenwright backends, with identity propagated from Gridlane to Selenwright so per-user quotas and session ACL keep working through the router.
+
+=== Topology
+
+----
+         ┌──────────┐
+ tests ──▶ gridlane │──▶ selenwright-a ──▶ Docker / browsers
+         │  :4444   │──▶ selenwright-b ──▶ Docker / browsers
+         └──────────┘
+----
+
+* Gridlane terminates BasicAuth from the client.
+* Gridlane stamps `X-Forwarded-User`, optionally `X-Admin`, and a shared `X-Router-Secret` on every upstream request.
+* Each Selenwright runs in `-auth-mode=trusted-proxy` and verifies the router secret before trusting the identity headers.
+* The shared secret means a direct client cannot bypass Gridlane and hit Selenwright with a spoofed `X-Forwarded-User`.
+
+=== Environment
+
+Pick any opaque values for local development and rotate them in real deployments:
+
+[source,bash]
+----
+$ export GRIDLANE_ALICE_PASSWORD=wonderland
+$ export GRIDLANE_ADMIN_TOKEN=root-token
+$ export GRIDLANE_ROUTER_SECRET=dev-router-secret
+----
+
+=== `router.json`
+
+A two-backend version of the shape from <<Quick Start Guide>>, with the `upstream_identity` block added:
+
+[source,json]
+----
+{
+  "version": 1,
+  "users": [
+    { "name": "alice", "password_ref": "env:GRIDLANE_ALICE_PASSWORD", "quota": { "max_sessions": 20 } }
+  ],
+  "guest": { "quota": { "max_sessions": 2 } },
+  "catalog": {
+    "browsers": [
+      { "name": "chrome", "versions": ["stable"], "protocols": ["webdriver", "playwright"] }
+    ]
+  },
+  "backend_pools": [
+    {
+      "id": "selenwright-a",
+      "endpoint": "http://selenwright-a:4444",
+      "region": "local-a",
+      "weight": 1,
+      "protocols": ["webdriver", "playwright"],
+      "health": { "enabled": true, "failure_threshold": 2, "cooldown": "10s" }
+    },
+    {
+      "id": "selenwright-b",
+      "endpoint": "http://selenwright-b:4444",
+      "region": "local-b",
+      "weight": 1,
+      "protocols": ["webdriver", "playwright"],
+      "health": { "enabled": true, "failure_threshold": 2, "cooldown": "10s" }
+    }
+  ],
+  "admin": { "token_ref": "env:GRIDLANE_ADMIN_TOKEN" },
+  "upstream_identity": {
+    "user_header":  "X-Forwarded-User",
+    "admin_header": "X-Admin",
+    "secret_ref":   "env:GRIDLANE_ROUTER_SECRET"
+  }
+}
+----
+
+=== Selenwright Invocation
+
+Each Selenwright backend in this topology runs in `trusted-proxy` mode with the same router secret:
+
+[source,bash]
+----
+$ selenwright                                                       \
+    -auth-mode=trusted-proxy                                        \
+    -user-header=X-Forwarded-User                                   \
+    -admin-header=X-Admin                                           \
+    -trusted-proxy-secret="$GRIDLANE_ROUTER_SECRET"
+----
+
+Selenwright rejects every request whose `X-Router-Secret` header does not match `-trusted-proxy-secret`. Without this guard any client could set `X-Forwarded-User: alice` directly against Selenwright and impersonate any user.
+
+NOTE: Selenwright's flag takes the secret value directly (not a `env:` reference). Pass the value via your process manager, systemd unit, or Docker Compose env interpolation; keep it out of shell history.
+
+=== Smoke Checks
+
+With Gridlane on `:4444`:
+
+[source,bash]
+----
+# Liveness + backend rollup
+$ curl -fsS http://127.0.0.1:4444/ping
+$ curl -fsS http://127.0.0.1:4444/status
+
+# Admin view of the loaded config (secrets redacted)
+$ curl -fsS -H 'X-Gridlane-Admin-Token: root-token' http://127.0.0.1:4444/config
+
+# Alice's quota — routed through trusted-proxy
+$ curl -fsS -u alice:wonderland http://127.0.0.1:4444/quota
+
+# Metrics on the side listener (no auth)
+$ curl -fsS http://127.0.0.1:9090/metrics
+----
+
+For a Playwright WebSocket handshake smoke using a configured catalog version and backend image:
+
+[source,bash]
+----
+$ websocat -E -n \
+    --basic-auth "$(printf 'alice:wonderland' | base64)" \
+    --protocol playwright-json \
+    ws://127.0.0.1:4444/playwright/chrome/stable
+----
+
+=== Security Notes
+
+* `/metrics` on the main Gridlane listener requires `X-Gridlane-Admin-Token`. The separate `-metrics-listen` listener serves metrics with no auth and is intended for an internal-only bind or a private network path.
+* Side endpoints (`/vnc/`, `/devtools/`, `/logs/`, `/video/`, `/download/`, `/downloads/`, `/clipboard/`, `/history/settings`) require user BasicAuth and do not fall back to guest access — see <<Authentication>>.
+* Incoming `X-Forwarded-User`, `X-Admin`, and `X-Router-Secret` headers from the client are stripped before auth runs. A malicious client cannot impersonate another user by setting them.
+
+See <<Identity Propagation>> for the deeper view of what happens on each upstream request.

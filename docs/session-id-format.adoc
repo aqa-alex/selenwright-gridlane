@@ -1,0 +1,67 @@
+== Session ID Format
+
+Every session Gridlane routes has a **public** session ID of the form:
+
+----
+r1_<route-token>_<upstream-id>
+----
+
+* `r1_` — a version prefix. Future breaking changes in the encoding scheme will bump it.
+* `<route-token>` — 16 hex characters. The first 8 bytes of `HMAC-SHA256(key, backend_pool.id)`, hex-encoded. Picks the backend pool for follow-up routing.
+* `<upstream-id>` — the session ID as it lives on the backend. For WebDriver this is whatever Selenwright returned on session-create. For Playwright this is a Gridlane-minted `pw_<32-hex>` that Selenwright accepts via `X-Selenwright-External-Session-ID` on the upgrade.
+
+=== Why This Shape
+
+Public session IDs carry enough information for any Gridlane replica serving the same `router.json` to route a follow-up to the correct backend, without any shared session state. A client that created a session through Gridlane replica A can send the next request through replica B and it lands on the same Selenwright container.
+
+The route token is also a cheap forgery check: a client that wants to target a specific backend pool has to present a session ID whose route-token matches, which means they had to have a session ID Gridlane issued for that pool. There is no per-session shared key — the HMAC is over the pool ID, not the session — so this is a routing constraint, not an authentication signal. Authentication happens at the scope layer; see <<Authentication>>.
+
+=== Route Token Derivation
+
+[source]
+----
+key         = "gridlane-route-token-v1"                  # fixed
+mac         = HMAC-SHA256(key, backend_pool.id)[:8]      # 8 bytes
+route_token = hex(mac)                                   # 16 chars
+----
+
+The key is a **domain separator**, not a per-deployment secret. This means:
+
+* An attacker who knows (or guesses) a `backend_pool.id` can compute its route token. This is fine — routing to a specific pool is not a privileged operation; scope and quota enforcement happen on the request itself, not on the token.
+* Two Gridlane deployments that reuse the same `backend_pool.id` produce identical tokens. If you federate traffic between deployments that share a client surface, keep pool IDs unique.
+
+A `-route-salt` flag that accepts an `env:` / `file:` secret reference is planned to make this a real per-deployment secret; see <<FAQ>>. Until then, uniqueness of `pool.id` is the mitigation.
+
+=== Upstream ID By Protocol
+
+[cols="1,1,3"]
+|===
+| Protocol | Shape | Source
+
+| WebDriver | Opaque | Whatever Selenwright returned in the session-create response
+| Playwright | `pw_<32-hex>` | Gridlane mints 16 random bytes, hex-encodes, prefixes `pw_`, and sends it to Selenwright in `X-Selenwright-External-Session-ID` on the upgrade request
+|===
+
+For WebDriver, Gridlane rewrites the upstream ID to the public form on the session-create response body. The client never sees the raw upstream ID.
+
+For Playwright, Gridlane echoes the public ID back to the client on the `101 Switching Protocols` response in `X-Selenwright-Session-ID`, and also uses it as the path segment for all side endpoints (`/vnc/<public-id>`, `/logs/<public-id>`, …).
+
+=== Follow-Up Routing
+
+Every request that carries a session ID on its path (WebDriver `/session/<id>/...`, or any Playwright side endpoint) is routed as:
+
+. Parse the public ID; if it does not match `r1_<16-hex>_<rest>`, return `400`.
+. Look up the backend pool whose `route-token` matches the prefix. If no pool matches (pool was removed on reload, or ID was spoofed), return `404`.
+. For WebDriver, rewrite the session segment on the proxied path to `<upstream-id>`. For Playwright side endpoints, keep the public ID as the path segment (Selenwright stored the session under the public ID).
+. Proxy the request.
+
+Follow-up requests do **not** re-check health. A session that belongs to a now-unhealthy pool is still routed to that pool, because:
+
+* The session is *already* on that backend. Sending the follow-up elsewhere would guarantee a `404`.
+* An unhealthy pool is kept out of **new** session placement, not out of existing-session fan-out.
+
+If the pool is genuinely down, the proxied request fails and the client sees the upstream error shape. The pool's failure counter ticks up — see <<Backend Health>>.
+
+=== Regenerating A Session ID
+
+Do not regenerate a Gridlane session ID on the client side. The ID is cryptographically bound to a specific pool via the route token; a hand-crafted ID with the wrong token will route to the wrong pool (or be rejected) and the session will not exist on that backend anyway. Use the ID Gridlane returned.
