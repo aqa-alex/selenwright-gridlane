@@ -59,6 +59,23 @@ if [ "${TAGNAME}" != "latest" ]; then
   cp -R "${GITHUB_WORKSPACE}/docs/output/${TAGNAME}/." "${GITHUB_WORKSPACE}/docs/output/latest/"
 fi
 
+echo "Writing root redirect → latest/"
+cat > "${GITHUB_WORKSPACE}/docs/output/index.html" <<'HTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Gridlane Documentation</title>
+<link rel="canonical" href="latest/">
+<meta http-equiv="refresh" content="0; url=latest/">
+<script>window.location.replace("latest/" + window.location.search + window.location.hash);</script>
+</head>
+<body>
+<p>Redirecting to <a href="latest/">the latest Gridlane documentation</a>.</p>
+</body>
+</html>
+HTML
+
 echo "Updating gh-pages branch"
 cd "${GITHUB_WORKSPACE}/docs/output"
 git add --all
