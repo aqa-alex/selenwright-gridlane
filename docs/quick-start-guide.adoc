@@ -54,7 +54,7 @@ $ docker run -d --name gridlane                            \
     -p 4444:4444 -p 9090:9090                              \
     -v $(pwd)/router.json:/etc/gridlane/router.json:ro     \
     -e GRIDLANE_ALICE_PASSWORD=wonderland                  \
-    aqa-alex/gridlane:latest-release                       \
+    selenwright/gridlane:latest-release                       \
     -config /etc/gridlane/router.json                      \
     -metrics-listen :9090
 ----
@@ -70,7 +70,7 @@ $ docker run -d --name gridlane                            \
     -v $(pwd)/router.json:/etc/gridlane/router.json:ro     \
     -e GRIDLANE_ALICE_PASSWORD=wonderland                  \
     -e GRIDLANE_ADMIN_TOKEN=root-token                     \
-    aqa-alex/gridlane:latest-release                       \
+    selenwright/gridlane:latest-release                       \
     -config /etc/gridlane/router.json                      \
     -metrics-listen :9090
 ----

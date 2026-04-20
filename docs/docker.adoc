@@ -16,7 +16,7 @@ $ docker run -d --name gridlane                               \
     -v $(pwd)/router.json:/etc/gridlane/router.json:ro        \
     -e GRIDLANE_ALICE_PASSWORD=wonderland                     \
     -e GRIDLANE_ADMIN_TOKEN=root-token                        \
-    aqa-alex/gridlane:latest-release                          \
+    selenwright/gridlane:latest-release                          \
     -config /etc/gridlane/router.json                         \
     -metrics-listen :9090                                     \
     -log-format json
@@ -47,7 +47,7 @@ networks:
 
 services:
   gridlane:
-    image: aqa-alex/gridlane:latest-release
+    image: selenwright/gridlane:latest-release
     networks: [gridlane-integration]
     ports:
       - "4444:4444"
@@ -71,7 +71,7 @@ services:
       - "10m"
 
   selenwright-a:
-    image: aqa-alex/selenwright:latest-release
+    image: selenwright/hub:latest-release
     networks: [gridlane-integration]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -86,7 +86,7 @@ services:
       - "-timeout=10m"
 
   selenwright-b:
-    image: aqa-alex/selenwright:latest-release
+    image: selenwright/hub:latest-release
     networks: [gridlane-integration]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
