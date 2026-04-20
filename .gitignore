@@ -1,6 +1,7 @@
 /gridlane
 /dist/
 /coverage.out
+/coverage.txt
 /router.json
 /docs/output/
 *.test
