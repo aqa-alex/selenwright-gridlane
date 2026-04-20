@@ -838,7 +838,7 @@ Passwords and tokens are <strong>never</strong> inlined in <code>router.json</co
     -p 4444:4444 -p 9090:9090                              \
     -v $(pwd)/router.json:/etc/gridlane/router.json:ro     \
     -e GRIDLANE_ALICE_PASSWORD=wonderland                  \
-    aqa-alex/gridlane:latest-release                       \
+    selenwright/gridlane:latest-release                       \
     -config /etc/gridlane/router.json                      \
     -metrics-listen :9090</code></pre>
 </div>
@@ -856,7 +856,7 @@ Passwords and tokens are <strong>never</strong> inlined in <code>router.json</co
     -v $(pwd)/router.json:/etc/gridlane/router.json:ro     \
     -e GRIDLANE_ALICE_PASSWORD=wonderland                  \
     -e GRIDLANE_ADMIN_TOKEN=root-token                     \
-    aqa-alex/gridlane:latest-release                       \
+    selenwright/gridlane:latest-release                       \
     -config /etc/gridlane/router.json                      \
     -metrics-listen :9090</code></pre>
 </div>
@@ -3910,7 +3910,7 @@ $ ./gridlane -log-format json   # one-line JSON, for log aggregators</code></pre
     -v $(pwd)/router.json:/etc/gridlane/router.json:ro        \
     -e GRIDLANE_ALICE_PASSWORD=wonderland                     \
     -e GRIDLANE_ADMIN_TOKEN=root-token                        \
-    aqa-alex/gridlane:latest-release                          \
+    selenwright/gridlane:latest-release                          \
     -config /etc/gridlane/router.json                         \
     -metrics-listen :9090                                     \
     -log-format json</code></pre>
@@ -3946,7 +3946,7 @@ $ docker kill -s HUP gridlane</code></pre>
 
 <span class="key">services</span>:
   <span class="key">gridlane</span>:
-    <span class="key">image</span>: <span class="string"><span class="content">aqa-alex/gridlane:latest-release</span></span>
+    <span class="key">image</span>: <span class="string"><span class="content">selenwright/gridlane:latest-release</span></span>
     <span class="key">networks</span>: <span class="string"><span class="content">[gridlane-integration]</span></span>
     <span class="key">ports</span>:
       - <span class="string"><span class="delimiter">&quot;</span><span class="content">4444:4444</span><span class="delimiter">&quot;</span></span>
@@ -3970,7 +3970,7 @@ $ docker kill -s HUP gridlane</code></pre>
       - <span class="string"><span class="delimiter">&quot;</span><span class="content">10m</span><span class="delimiter">&quot;</span></span>
 
   <span class="key">selenwright-a</span>:
-    <span class="key">image</span>: <span class="string"><span class="content">aqa-alex/selenwright:latest-release</span></span>
+    <span class="key">image</span>: <span class="string"><span class="content">selenwright/hub:latest-release</span></span>
     <span class="key">networks</span>: <span class="string"><span class="content">[gridlane-integration]</span></span>
     <span class="key">volumes</span>:
       - <span class="string"><span class="content">/var/run/docker.sock:/var/run/docker.sock</span></span>
@@ -3985,7 +3985,7 @@ $ docker kill -s HUP gridlane</code></pre>
       - <span class="string"><span class="delimiter">&quot;</span><span class="content">-timeout=10m</span><span class="delimiter">&quot;</span></span>
 
   <span class="key">selenwright-b</span>:
-    <span class="key">image</span>: <span class="string"><span class="content">aqa-alex/selenwright:latest-release</span></span>
+    <span class="key">image</span>: <span class="string"><span class="content">selenwright/hub:latest-release</span></span>
     <span class="key">networks</span>: <span class="string"><span class="content">[gridlane-integration]</span></span>
     <span class="key">volumes</span>:
       - <span class="string"><span class="content">/var/run/docker.sock:/var/run/docker.sock</span></span>
@@ -4090,7 +4090,7 @@ $ docker kill -s HUP gridlane</code></pre>
 <div id="footer">
 <div id="footer-text">
 Version latest<br>
-Last updated 2026-04-20 08:59:46 UTC
+Last updated 2026-04-20 09:12:06 UTC
 </div>
 </div>
 </body>
