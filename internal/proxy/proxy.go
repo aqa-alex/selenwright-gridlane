@@ -43,8 +43,10 @@ const (
 	// headerSelenwrightRouterSecret carries the shared secret between gridlane
 	// and selenwright's SourceTrust gate. Without it selenwright rejects any
 	// trusted-proxy identity header — so a direct client cannot bypass gridlane
-	// by stamping X-Forwarded-User themselves.
-	headerSelenwrightRouterSecret = "X-Selenwright-Router-Secret"
+	// by stamping X-Forwarded-User themselves. The header name matches
+	// selenwright's protect.HeaderRouterSecret; changing either side breaks
+	// the contract.
+	headerSelenwrightRouterSecret = "X-Router-Secret"
 
 	playwrightExternalSessionPrefix = "pw_"
 )

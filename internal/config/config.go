@@ -45,7 +45,7 @@ type UpstreamIdentity struct {
 	// admin scope. Empty means don't emit a dedicated admin flag.
 	AdminHeader string `json:"admin_header,omitempty"`
 	// SecretRef resolves a shared router secret via env:/file:. When present
-	// gridlane stamps X-Selenwright-Router-Secret on every upstream request so
+	// gridlane stamps X-Router-Secret on every upstream request so
 	// selenwright's SourceTrust gate can reject direct clients that try to
 	// spoof X-Forwarded-User without going through the router.
 	SecretRef string `json:"secret_ref,omitempty"`

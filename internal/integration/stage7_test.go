@@ -237,7 +237,7 @@ func TestUpstreamIdentityPropagatesAndSpoofIsBlocked(t *testing.T) {
 	req.SetBasicAuth("alice", "wonderland")
 	req.Header.Set("X-Forwarded-User", "attacker")
 	req.Header.Set("X-Admin", "true")
-	req.Header.Set("X-Selenwright-Router-Secret", "leaked")
+	req.Header.Set("X-Router-Secret", "leaked")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("spoof request: %v", err)
@@ -714,7 +714,7 @@ func (b *fakeSelenwright) record(r *http.Request) {
 		Subprotocol:       r.Header.Get("Sec-WebSocket-Protocol"),
 		ForwardedUser:     r.Header.Get("X-Forwarded-User"),
 		Admin:             r.Header.Get("X-Admin"),
-		RouterSecret:      r.Header.Get("X-Selenwright-Router-Secret"),
+		RouterSecret:      r.Header.Get("X-Router-Secret"),
 	})
 }
 
