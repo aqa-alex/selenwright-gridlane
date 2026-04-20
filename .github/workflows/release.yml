@@ -1,0 +1,62 @@
+name: release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  golang:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version: ~1.26.1
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum', 'go.mod') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Test
+        run: ci/test.sh
+
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+
+      - name: Release build
+        run: goreleaser release --clean
+
+      - name: Prepare release version
+        run: echo "RELEASE_VERSION=${GITHUB_REF:10}" >> $GITHUB_ENV
+
+      - uses: AButler/upload-release-assets@v2.0
+        with:
+          files: 'dist/*.tar.gz;dist/checksums.txt'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: ci/docker-push.sh "$RELEASE_VERSION"
+
+      - name: Latest release image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: ci/docker-push.sh latest-release

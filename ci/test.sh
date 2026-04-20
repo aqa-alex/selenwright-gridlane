@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -euo pipefail
+
+export GO111MODULE="on"
+
+go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+go vet ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
